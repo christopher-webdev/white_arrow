@@ -1171,7 +1171,7 @@ def send_limited_telegram_message(message):
         print("⏱️ Message skipped to respect 5-minute interval.")
 
 def manage_trades(symbol, df_buy, df_sell):
-    """Enhanced trade management using the correct directional features."""
+    """Enhanced trade management using the correct directional features with meta classifier TP adjustment."""
     trades = load_trades()
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -1186,7 +1186,7 @@ def manage_trades(symbol, df_buy, df_sell):
         for position in positions:
             trade_id = str(position.ticket)
             is_buy = position.type == mt5.ORDER_TYPE_BUY
-            df = df_buy if is_buy else df_sell  # Pick the correct directional DataFrame
+            df = df_buy if is_buy else df_sell
             latest_5m = df.iloc[-2]
             latest_5m_sma9 = latest_5m["SMA_9"]
             current_price = mt5.symbol_info_tick(symbol).ask if is_buy else mt5.symbol_info_tick(symbol).bid
@@ -1219,51 +1219,66 @@ def manage_trades(symbol, df_buy, df_sell):
                     "current_rr": 0,
                     "close_reason": None,
                     "closed_fraction": 0.0,
-                    "hit_1_to_3": False
+                    "hit_1_to_3": False,
+                    "meta_classifier": None,
+                    "meta_class": None,
+                    "balance_at_entry": mt5.account_info().balance,
+                    "equity_at_entry": mt5.account_info().equity,
+                    "current_price": current_price,
+                    "trade_duration": 0,
+                    "milestone_comment": None,
+                    "Target Hit": False
                 }
 
             current_time = datetime.datetime.now(datetime.timezone.utc)
             trade_duration = (current_time - entry_time).total_seconds() / 60
             rr_unit = abs(entry_price - current_sl)
+
             if rr_unit == 0:
                 print(f"[ERROR] RR Unit is zero for trade {trade_id}. Skipping RR calculation.")
                 continue
 
-            # === Enforce consistent 2.0 RR TP ===
-            expected_tp = entry_price + 1.3 * rr_unit if is_buy else entry_price - 1.3 * rr_unit
-            rounded_expected_tp = round(expected_tp, digits)
-            tp_deviation = abs((current_tp or 0) - rounded_expected_tp)
-
-            if tp_deviation > 0.2 * rr_unit:
-                print(f"[⚙️ FIX] Adjusting TP for {symbol} trade {trade_id} to new 2.0 RR level.")
-                request = {
-                    "action": mt5.TRADE_ACTION_SLTP,
-                    "symbol": symbol,
-                    "position": int(trade_id),
-                    "sl": current_sl,
-                    "tp": rounded_expected_tp,
-                    "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
-                    "magic": 123456,
-                    "comment": "Set TP to fixed 2.0 RR",
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": mt5.ORDER_FILLING_IOC,
+            # === Meta Classifier-based TP Adjustment ===
+            meta_class = trade_data.get("meta_class")
+            if meta_class is not None:
+                rr_targets = {
+                    0: 1.0,
+                    1: 1.5,
+                    2: 2.0,
+                    3: 3.0
                 }
-                result = mt5.order_send(request)
-                if result.retcode == mt5.TRADE_RETCODE_DONE:
-                    trade_data["tp"] = rounded_expected_tp
-                    send_telegram_message(
-                        f"🎯 TP updated for {symbol} trade {trade_id} → Fixed 2.0 RR @ {rounded_expected_tp:.5f}"
-                    )
-                else:
-                    print(f"[WARNING] Failed to adjust TP for {trade_id}: {result.comment}")
+                target_rr = rr_targets.get(meta_class, 1.5)
+                expected_tp = entry_price + (target_rr * rr_unit) if is_buy else entry_price - (target_rr * rr_unit)
+                rounded_expected_tp = round(expected_tp, digits)
+                tp_deviation = abs((current_tp or 0) - rounded_expected_tp)
+
+                if tp_deviation > 0.1 * rr_unit:
+                    print(f"[⚙️ FIX] Adjusting TP for {symbol} trade {trade_id} to {target_rr}RR based on meta_class {meta_class}")
+                    request = {
+                        "action": mt5.TRADE_ACTION_SLTP,
+                        "symbol": symbol,
+                        "position": int(trade_id),
+                        "sl": current_sl,
+                        "tp": rounded_expected_tp,
+                        "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
+                        "magic": 123456,
+                        "comment": f"Set TP to fixed {target_rr} RR",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": mt5.ORDER_FILLING_IOC,
+                    }
+                    result = mt5.order_send(request)
+                    if result.retcode == mt5.TRADE_RETCODE_DONE:
+                        trade_data["tp"] = rounded_expected_tp
+                        send_telegram_message(
+                            f"🎯 TP updated for {symbol} trade {trade_id} → {target_rr}RR @ {rounded_expected_tp:.5f} (meta_class: {meta_class})"
+                        )
+                    else:
+                        print(f"[WARNING] Failed to adjust TP for {trade_id}: {result.comment}")
 
             # === Calculate RR and update stats ===
             price_diff = (current_price - entry_price) if is_buy else (entry_price - current_price)
             current_rr = price_diff / rr_unit
             max_rr = max(current_rr, trade_data.get("max_rr", 0))
-
-            print(f"Trade ID: {trade_id}, Duration: {trade_duration:.2f} min, Profit: {profit:.2f}, Current RR: {current_rr:.2f}")
-            send_limited_telegram_message(f"Trade ID: {trade_id}, Duration: {trade_duration:.2f} min, Profit: {profit:.2f}, Current RR: {current_rr:.2f}")
 
             trade_data.update({
                 "current_price": current_price,
@@ -1275,81 +1290,72 @@ def manage_trades(symbol, df_buy, df_sell):
                 "tp": current_tp
             })
 
-            # Milestone: 2RR
+            # Milestone
             if max_rr >= 1.5 and not trade_data.get("Target Hit"):
                 trade_data["hit_1_to_2"] = True
-                trade_data["milestone_comment"] = "🎯 Hit RR"
-                send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit Target RR! Max RR: {max_rr:.2f}")
-    
+                trade_data["milestone_comment"] = "🎯 Hit 1.5RR"
+                trade_data["Target Hit"] = True
+                send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit 1.5RR Target! Current RR: {current_rr:.2f}")
+
             # === Exit Rules ===
-            if current_rr >= 1.3:
-                if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
-                    close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                    trade_data["close_reason"] = "Early exit (5m TF) - Time Decay Exit"
-                    trades[trade_id] = trade_data
-                    continue
-            funx = trade_data.get("funx")
-            if trade_duration >= 240:
-                send_telegram_message(f"📉 Exit (5m TF) - Time Decay Exit: {current_rr:.2f}RR")
-                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                trade_data["close_reason"] = "Exit (5m TF) - Time Decay Exit"
-                trades[trade_id] = trade_data
+            exit_triggered = False
 
-
-            if max_rr >= 1.2 and current_rr <= 0.3:
-                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                trade_data["close_reason"] = f"Negative Price Drop to breakeven {current_rr:.2f}RR"
-                send_telegram_message(f"📉 Negative Price Drop to Breakeven: {current_rr:.2f}RR")
-
-            # === Staged Partial Close Logic ===
-            # closed_fraction = trade_data.get("closed_fraction", 0.0)
-
-            # Stage 1: 1.0RR → Close 50%
-            # if current_rr >= 1.5 and closed_fraction < 0.5:
-            #     close_trade_partial(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit, fraction=0.5 - closed_fraction)
-            #     trade_data["closed_fraction"] = 0.5
-            #     trade_data["close_reason"] = f"Partial close at 1.50RR: 50%"
-            #     send_telegram_message(f"💰 1.50RR hit — closed 50% of {symbol} position")
-
-            # # Stage 2: 2.0RR → Close 30%
-            # elif current_rr >= 2.0 and closed_fraction < 1.0:
-            #     close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-            #     trade_data["closed_fraction"] = 1.0
-            #     trade_data["close_reason"] = f"Full close at 2.0RR: 100%"
-            #     send_telegram_message(f"💰 2.0RR hit — closed 100% of {symbol} position")
-
-            # # # Stage 3: 3.0RR → Close 15%
-            # elif current_rr >= 3.0 and closed_fraction < 1.0:
-            #     close_trade_partial(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit, fraction=1.0 - closed_fraction)
-            #     trade_data["closed_fraction"] = 1.0
-            #     trade_data["close_reason"] = f"Partial close at 3.0RR: 15%"
-            #     send_telegram_message(f"💰 3.0RR hit — closed additional 15% of {symbol} position")
-
-            # # Final Trail Exit — SMA9 close against trade direction
-            # elif closed_fraction >= 0.5:
-            #     if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
+            # Rule 1: SMA9 crossover against position
+            # if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
+            #     if current_rr >= 0.5:
             #         close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-            #         trade_data["close_reason"] = "Final 5% exit — SMA9 crossover"
-            #         send_telegram_message(f"🔁 Final 5% closed: SMA9 crossed against {symbol} trade")
+            #         trade_data["close_reason"] = "SMA9 crossover against position"
+            #         exit_triggered = True
+
+            # Rule 2: Time decay (4 hours)
+            if not exit_triggered and trade_duration >= 240:
+                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                trade_data["close_reason"] = "Time decay exit (4h)"
+                exit_triggered = True
+                send_telegram_message(f"📉 Time decay exit for {symbol} after 4 hours")
+
+            # Rule 3: Profit drop from peak
+            if not exit_triggered and max_rr >= 1.5 and current_rr <= 0.3:
+                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
+                exit_triggered = True
+                send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
+
+            if exit_triggered:
+                trade_data.update({
+                    "exit_price": current_price,
+                    "exit_time": current_time.isoformat(),
+                    "profit": profit
+                })
+                trades[trade_id] = trade_data
+                save_trades(trades)
+                continue
 
             trades[trade_id] = trade_data
 
     # === Sync broker history for closed deals ===
-    closed = mt5.history_deals_get(datetime.datetime.now() - datetime.timedelta(days=1), datetime.datetime.now())
-    for deal in closed:
-        trade_id = str(deal.ticket)
-        if trade_id not in trades:
-            continue
-        trade_data = trades[trade_id]
-        if trade_data.get("exit_time"):
-            continue
-        trade_data["exit_price"] = deal.price
-        trade_data["exit_time"] = datetime.datetime.fromtimestamp(deal.time).isoformat()
-        trade_data["profit"] = deal.profit
-        if trade_data.get("max_rr", 0) >= 1.3:
-            trade_data["hit_1_to_2"] = True
-            trade_data["milestone_comment"] = "🎯 Hit 1.3 RR"
-        trades[trade_id] = trade_data
+    closed_deals = mt5.history_deals_get(
+        datetime.datetime.now() - datetime.timedelta(days=1),
+        datetime.datetime.now()
+    )
+
+    if closed_deals:
+        for deal in closed_deals:
+            if deal.entry != 1:
+                continue
+
+            position_id = str(deal.position_id)
+            if position_id in trades:
+                trade_data = trades[position_id]
+                if not trade_data.get("exit_time"):
+                    trade_data.update({
+                        "exit_price": deal.price,
+                        "exit_time": datetime.datetime.fromtimestamp(deal.time).isoformat(),
+                        "profit": deal.profit,
+                        "close_reason": trade_data.get("close_reason") or "Closed by broker"
+                    })
+                    trades[position_id] = trade_data
+                    print(f"Updated closed trade {position_id} with exit data")
 
     save_trades(trades)
 
@@ -1461,6 +1467,7 @@ def buyM5(df_buy, response_data, symbol):
     prev = df.iloc[-3]
     curr = df.iloc[-2]
     pair_code = curr['pair']
+    
 
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"❌ No spread limit defined for pair '{pair_code}'")
@@ -1476,8 +1483,8 @@ def buyM5(df_buy, response_data, symbol):
         )
     if meta_class <= rr_thresh:
         logger.info(
-            f"{symbol}: Alert — Meta Predicted {meta_class:.2f} which is below RR threshold "
-            "but meta-model approved. Proceeding with trade."
+            f"{symbol}: Alert — Meta Predicted Buy {meta_class:.2f}:1RR which is below RR threshold "
+            
         )
         return
 
@@ -1584,8 +1591,8 @@ def sellM5(df_sell, response_data, symbol):
         )
     if meta_class <= rr_thresh:
         logger.info(
-            f"{symbol}: Alert — Meta Predicted {meta_class:.2f} which is below RR threshold "
-            "but meta-model approved. Proceeding with trade."
+            f"{symbol}: Alert — Meta Predicted Sell {meta_class:.2f}:1RR which is below RR threshold "
+            
         )
         return
 
