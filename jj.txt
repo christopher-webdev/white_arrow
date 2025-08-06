@@ -1,0 +1,85 @@
+
+📈 Training best model on train set...
+
+🎯 Best Threshold for F1: 0.400 (F1=0.483)
+
+✅ Accuracy on test set (optimized threshold): 0.4641
+📊 Classification Report (Optimized Threshold):
+               precision    recall  f1-score   support
+
+          SL       0.84      0.30      0.44      4652
+          TP       0.34      0.86      0.48      1918
+
+    accuracy                           0.46      6570
+   macro avg       0.59      0.58      0.46      6570
+weighted avg       0.69      0.46      0.46      6570
+
+🖼️ Confusion matrix saved as 'confusion_matrix_optimized.png'
+🖼️ ROC Curve saved as 'roc_curve.png'
+🖼️ Precision-Recall Curve saved as 'precision_recall_curve.png'
+
+📦 Training on full dataset...
+✅ Full model saved as 'lgb_classifier_model_full.txt'
+📊 Feature importances saved to 'lgb_classifier_feature_importance.csv'
+📉 Correlation matrix saved as 'feature_correlation_matrix_classifier.csv'
+🖼️ Heatmap saved as 'feature_correlation_heatmap_classifier.png'
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 
+
+
+
+📊xu Class distribution:
+rr_class
+ 0    2369
+ 1    1042
+-1     755
+Name: count, dtype: int64
+Filtered-In Trades: 0
+✅ Final dataset saved: 4166 trades from 1 pairs
+count    4166.000000
+mean        1.032262
+std         1.007362
+min         0.000000
+25%         0.154000
+50%         0.721500
+75%         1.672000
+max         3.000000
+Name: rr_label, dtype: float64
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ python tx4.py
+📂 Processing gbp.csv
+📊 Class distribution:
+rr_class
+ 0    6037
+ 1    2600
+-1     827
+Name: count, dtype: int64
+Filtered-In Trades: 0
+✅ Final dataset saved: 9464 trades from 1 pairs
+count    9464.000000
+mean        1.151800
+std         1.094034
+min         0.000000
+25%         0.128000
+50%         0.820500
+75%         2.042500
+max         3.000000
+Name: rr_label, dtype: float64
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$
+
+📊 cad Class distribution:
+rr_class
+ 0    7032
+ 1    2880
+-1     935
+Name: count, dtype: int64
+Filtered-In Trades: 0
+✅ Final dataset saved: 10847 trades from 1 pairs
+count    10847.000000
+mean         1.125006
+std          1.091714
+min          0.000000
+25%          0.124000
+50%          0.764000
+75%          2.008000
+max          3.000000
+Name: rr_label, dtype: float64
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 

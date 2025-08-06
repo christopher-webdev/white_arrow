@@ -1,0 +1,9 @@
+# Ignore all CSV files
+*.csv
+
+# Ignore all PNG images
+*.png
+
+# Ignore virtual environment folder
+/venv
+/csv
