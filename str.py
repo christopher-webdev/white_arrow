@@ -7,6 +7,52 @@ from typing import Dict, Any, List
 import numpy as np
 import pandas as pd
 
+import matplotlib.pyplot as plt
+
+def plot_equity_curve(df: pd.DataFrame, outdir: Path, by_time=True):
+    """
+    Plots equity curve and saves equity_curve.png.
+    Handles tz-aware datetimes and NaT safely.
+    Falls back to trade index if not enough valid timestamps.
+    """
+    df_sorted = df.copy()
+
+    if by_time and "exit_time" in df_sorted.columns:
+        # Ensure datetime, coerce errors to NaT, strip timezone
+        x_time = pd.to_datetime(df_sorted["exit_time"], errors="coerce", utc=True)
+        x_time = x_time.dt.tz_localize(None)
+        mask = x_time.notna() & df_sorted["equity"].notna()
+
+        # If we have at least 2 valid points, plot by time; else fallback to trade index
+        if mask.sum() >= 2:
+            df_sorted = df_sorted.loc[mask].sort_values("exit_time")
+            x = pd.to_datetime(df_sorted["exit_time"], utc=True).dt.tz_localize(None)
+            y = df_sorted["equity"].astype(float)
+            xlabel = "Time"
+        else:
+            df_sorted = df_sorted.sort_index()
+            x = np.arange(1, len(df_sorted) + 1)
+            y = df_sorted["equity"].astype(float)
+            xlabel = "Trade #"
+    else:
+        df_sorted = df_sorted.sort_index()
+        x = np.arange(1, len(df_sorted) + 1)
+        y = df_sorted["equity"].astype(float)
+        xlabel = "Trade #"
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(x, y, marker="o", linewidth=2, markersize=3)
+    plt.title("Equity Curve", fontsize=14)
+    plt.xlabel(xlabel)
+    plt.ylabel("Equity")
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+
+    save_path = outdir / "equity_curve.png"
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f"Equity curve saved -> {save_path}")
+
 
 def load_trades(path: Path) -> pd.DataFrame:
     with open(path, "r", encoding="utf-8") as f:
@@ -388,6 +434,9 @@ def main():
 
     # Build equity curve (trade-level)
     df = equity_curve(df)
+    plot_equity_curve(df, args.outdir, by_time=True)
+
+
         # --- Trade-level drawdown (works even for 1 day) ---
     dd_trade = drawdown_from_series(df["equity"])
 
