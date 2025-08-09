@@ -91,14 +91,14 @@ MODELS = {
     # BUY side
     "clf_buy_1.1": "./model_artifacts_buy/classifier_1_1.txt",
     "clf_buy_1.2": "./model_artifacts_buy/classifier_1_2.txt",
-    "clf_buy_1.3": "./model_artifacts_buy/classifier_1_3.txt",
+    # "clf_buy_1.3": "./model_artifacts_buy_1_1/classifier_1_3.txt",
     "reg_buy": "./model_artifacts_buy/regressor.txt",
     "meta_buy": "./model_artifacts_buy/meta_model.txt",
 
     # SELL side
     "clf_sell_1.1": "./model_artifacts_sell/classifier_1_1.txt",
     "clf_sell_1.2": "./model_artifacts_sell/classifier_1_2.txt",
-    "clf_sell_1.3": "./model_artifacts_sell/classifier_1_3.txt",
+    # "clf_sell_1.3": "./model_artifacts_sell_1_1/classifier_1_3.txt",
     "reg_sell": "./model_artifacts_sell/regressor.txt",
     "meta_sell": "./model_artifacts_sell/meta_model.txt"
 }
@@ -222,7 +222,7 @@ def calculate_features(df, direction=1, pair_code=None):
     # df['is_tokyo_session']    = ((df['hour'] >=  2) & (df['hour'] <  9)).astype(int)
     # df['is_london_session']   = ((df['hour'] >=  8) & (df['hour'] < 17)).astype(int)
     # df['is_new_york_session'] = ((df['hour'] >= 16) & (df['hour'] < 22)).astype(int)
-    df['valid_hour'] = df['hour'].between(2, 18)
+    df['valid_hour'] = df['hour'].between(2, 20)
     df.drop(columns=['Time', 'hour','real_volume','spread'], inplace=True)
 
     # df.drop(columns=['Volume'], inplace=True)
@@ -681,7 +681,7 @@ def calculate_features(df, direction=1, pair_code=None):
     if direction == 1:
         # Long setup - maintain original order
         df['entry_price'] = df['High']
-        df['stop_loss_price'] = (df['entry_price'] - 4 * df['volatility'])
+        df['stop_loss_price'] = (df['entry_price'] - 6 * df['volatility'])
         # Drop volatility here exactly as in original
         df = df.drop(columns=['volatility'], errors='ignore')  # Safe drop
         df['stop_loss_distance'] = (df['entry_price'] - df['stop_loss_price'])
@@ -690,7 +690,7 @@ def calculate_features(df, direction=1, pair_code=None):
     else:
         # Short setup - maintain original order
         df['entry_price'] = df['Low']
-        df['stop_loss_price'] = (df['entry_price'] + 4 * df['volatility'])
+        df['stop_loss_price'] = (df['entry_price'] + 6 * df['volatility'])
         # Drop volatility here exactly as in original
         df = df.drop(columns=['volatility'], errors='ignore')  # Safe drop
         df['stop_loss_distance'] = (df['stop_loss_price'] - df['entry_price'])
@@ -1189,6 +1189,7 @@ def manage_trades(symbol, df_buy, df_sell):
             df = df_buy if is_buy else df_sell
             latest_5m = df.iloc[-2]
             latest_5m_sma9 = latest_5m["SMA_9"]
+            valid_hour = latest_5m["valid_hour"]
             current_price = mt5.symbol_info_tick(symbol).ask if is_buy else mt5.symbol_info_tick(symbol).bid
             profit = position.profit
             entry_price = position.price_open
@@ -1242,12 +1243,11 @@ def manage_trades(symbol, df_buy, df_sell):
             meta_class = trade_data.get("meta_class")
             if meta_class is not None:
                 rr_targets = {
-                    0: 1.0,
-                    1: 1.5,
-                    2: 2.0,
-                    3: 3.0
+                    0: 0.0,
+                    1: 1.10,
+                    2: 1.10,
                 }
-                target_rr = rr_targets.get(meta_class, 1.5)
+                target_rr = rr_targets.get(meta_class, 1.0)
                 expected_tp = entry_price + (target_rr * rr_unit) if is_buy else entry_price - (target_rr * rr_unit)
                 rounded_expected_tp = round(expected_tp, digits)
                 tp_deviation = abs((current_tp or 0) - rounded_expected_tp)
@@ -1291,21 +1291,26 @@ def manage_trades(symbol, df_buy, df_sell):
             })
 
             # Milestone
-            if max_rr >= 1.5 and not trade_data.get("Target Hit"):
-                trade_data["hit_1_to_2"] = True
-                trade_data["milestone_comment"] = "🎯 Hit 1.5RR"
-                trade_data["Target Hit"] = True
-                send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit 1.5RR Target! Current RR: {current_rr:.2f}")
+            # if max_rr >= 1.5 and not trade_data.get("Target Hit"):
+            #     trade_data["hit_1_to_2"] = True
+            #     trade_data["milestone_comment"] = "🎯 Hit 1.5RR"
+            #     trade_data["Target Hit"] = True
+            #     send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit 1.5RR Target! Current RR: {current_rr:.2f}")
 
             # === Exit Rules ===
             exit_triggered = False
 
             # Rule 1: SMA9 crossover against position
-            # if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
-            #     if current_rr >= 0.5:
-            #         close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-            #         trade_data["close_reason"] = "SMA9 crossover against position"
-            #         exit_triggered = True
+            if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
+                if current_rr >= 0.5 and trade_duration >= 60 :
+                    close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                    trade_data["close_reason"] = "SMA9 crossover against position"
+                    exit_triggered = True
+            
+            if max_rr >= 0.9 and current_rr <= 0.1 :
+                    close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                    trade_data["close_reason"] = "Negative Drop"
+                    exit_triggered = True
 
             # Rule 2: Time decay (4 hours)
             if not exit_triggered and trade_duration >= 240:
@@ -1313,13 +1318,27 @@ def manage_trades(symbol, df_buy, df_sell):
                 trade_data["close_reason"] = "Time decay exit (4h)"
                 exit_triggered = True
                 send_telegram_message(f"📉 Time decay exit for {symbol} after 4 hours")
+           
+            if not valid_hour: 
+                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                trade_data["close_reason"] = "📉 Closed all trade for the day"
+                exit_triggered = True
+                send_telegram_message(f"📉 Closed all trade for the day")
+
 
             # Rule 3: Profit drop from peak
-            if not exit_triggered and max_rr >= 1.5 and current_rr <= 0.3:
-                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
-                exit_triggered = True
-                send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
+            # if not exit_triggered and max_rr >= 1.5 and current_rr <= 0.3:
+            #     close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+            #     trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
+            #     exit_triggered = True
+            #     send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
+            
+            # if not exit_triggered and max_rr >= 2.5 and current_rr <= 1.5:
+            #     close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+            #     trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
+            #     exit_triggered = True
+            #     send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
+
 
             if exit_triggered:
                 trade_data.update({
@@ -1332,18 +1351,17 @@ def manage_trades(symbol, df_buy, df_sell):
                 continue
 
             trades[trade_id] = trade_data
-
-    # === Sync broker history for closed deals ===
+  # === Sync broker history for closed deals ===
     closed_deals = mt5.history_deals_get(
-        datetime.datetime.now() - datetime.timedelta(days=1),
+        datetime.datetime.now() - datetime.timedelta(days=1), 
         datetime.datetime.now()
     )
-
+    
     if closed_deals:
         for deal in closed_deals:
-            if deal.entry != 1:
+            if deal.entry != 1:  # 1 means entry deal, we want exit deals
                 continue
-
+                
             position_id = str(deal.position_id)
             if position_id in trades:
                 trade_data = trades[position_id]
@@ -1361,7 +1379,7 @@ def manage_trades(symbol, df_buy, df_sell):
 
 
 
-def extract_features(df, save_csv=False, csv_path="latest_features_vertical.csv"):
+def extract_features(df):
     latest_data_df = df.iloc[-2]
     # print("🔍 Latest feature extracted:")
     # print(latest_data_df)
@@ -1376,45 +1394,7 @@ def extract_features(df, save_csv=False, csv_path="latest_features_vertical.csv"
 
     feature_values = [float(latest_data_df[feat]) for feat in feature_list]
 
-    if save_csv:
-        vertical_df = pd.DataFrame({
-            "Feature": feature_list,
-            "Value": feature_values
-        })
-        vertical_df.to_csv(csv_path, index=False)
-        print(f"📁 Saved vertical feature list to: {csv_path}")
-
     return feature_values
-
-
-def send_summary_if_needed(response_data, symbol):
-    global last_summary_sent_time
-    current_time = time.time()
-
-    if current_time - last_summary_sent_time >= SUMMARY_SEND_INTERVAL:
-        # Prepare the summary message for the specific time interval
-        msg = f"📊 SYMBOL: {symbol} - Data\n\n"
-
-        # Add Buy Prediction
-        msg += (
-            f" 🔵 Buy  5m: {response_data['buy']['prediction']} ("
-            f"Class 0: {response_data['buy']['probabilities']['class_0']:.2f}, "
-            f"Class 1: {response_data['buy']['probabilities']['class_1']:.2f})\n\n"
-        )
-       
-        # Add Sell Prediction
-        msg += (
-            f" 🔴 Sell 5m: {response_data['sell']['prediction']} ("
-            f"Class 0: {response_data['sell']['probabilities']['class_0']:.2f}, "
-            f"Class 1: {response_data['sell']['probabilities']['class_1']:.2f})\n\n"
-        )
-      
-        
-        # Send the summary message to Telegram or any other service
-        send_telegram_message(msg)
-
-        # Update the last summary sent time to the current time
-        last_summary_sent_time = current_time
 
 spread_limits_low = {
         "xau": 01.00, "jpy": 0.050,
@@ -1467,7 +1447,7 @@ def buyM5(df_buy, response_data, symbol):
     prev = df.iloc[-3]
     curr = df.iloc[-2]
     pair_code = curr['pair']
-    
+    log_returns = curr['log_returns'] 
 
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"❌ No spread limit defined for pair '{pair_code}'")
@@ -1481,15 +1461,25 @@ def buyM5(df_buy, response_data, symbol):
             f"{symbol}: Warning — RR_pred {rr_pred:.2f} below threshold {rr_thresh:.2f}, "
             "but meta-model approved. Proceeding with trade."
         )
-    if meta_class <= rr_thresh:
-        logger.info(
-            f"{symbol}: Alert — Meta Predicted Buy {meta_class:.2f}:1RR which is below RR threshold "
-            
-        )
-        return
+   
+    # if log_returns <= 0.0001:
+    #     logger.info(
+    #         f"{symbol}: Alert skipping trade log returns too low "        
+    #     )
+    #     return 
+    
+    META_CONF_THRESH = {1: 0.85, 2: 0.85}
+
+    if meta_class in META_CONF_THRESH:
+        if meta_probs[meta_class] < META_CONF_THRESH[meta_class]:
+            logger.info(
+                f"{symbol}: Buy skipped — Meta class {meta_class} prob {meta_probs[meta_class]:.2f} "
+                f"below threshold {META_CONF_THRESH[meta_class]}"
+            )
+            return  
 
     # === Trade Prices ===
-    trigger_price = curr["High"]
+    trigger_price = curr["Close"]
     sl_price = curr["stop_loss_price"]
     sl_dist = trigger_price - sl_price
     tp_price = trigger_price + (sl_dist * meta_class)  # final_class = TP multiplier
@@ -1525,14 +1515,16 @@ def buyM5(df_buy, response_data, symbol):
         f"{'-'*42}\n"
         f"✅ ML BUY SIGNAL (5m) {symbol}\n"
         f"🎯 Entry      : {curr['entry_price']:.5f}\n"
-        f"🛡️  StopLoss   : {sl_price:.5f}\n"
+        f"🛡️ StopLoss   : {sl_price:.5f}\n"
         f"📈 TakeProfit : {tp_price:.5f} (x{meta_class})\n"
         f"🤖 Pred RR    : {rr_pred:.2f}\n"
         f"📊 Classifier Probs:\n"
         f"   ├─ 1:1 : {clf_probs.get('clf_1_1_prob', 0):.2f}\n"
         f"   ├─ 1:2 : {clf_probs.get('clf_1_2_prob', 0):.2f}\n"
-        f"   └─ 1:3 : {clf_probs.get('clf_1_3_prob', 0):.2f}\n"
-        f"📊 Meta Probabilities: {meta_probs}\n"
+        f"📊 Meta Probabilities:\n"
+        f"   ├─ Reject : {meta_probs[0]:.2f}\n"
+        f"   ├─ 1:1    : {meta_probs[1]:.2f}\n"
+        f"   └─ 1:2    : {meta_probs[2]:.2f}\n"
         f"📊 Candle:\n"
         f"   ├─ Open   : {curr['Open']:.5f}\n"
         f"   ├─ High   : {curr['High']:.5f}\n"
@@ -1576,6 +1568,7 @@ def sellM5(df_sell, response_data, symbol):
     prev = df.iloc[-3]
     curr = df.iloc[-2]
     pair_code = curr['pair']
+    log_returns = curr['log_returns'] 
 
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"❌ No spread limit defined for pair '{pair_code}'")
@@ -1589,15 +1582,24 @@ def sellM5(df_sell, response_data, symbol):
             f"{symbol}: Warning — RR_pred {rr_pred:.2f} below threshold {rr_thresh:.2f}, "
             "but meta-model approved. Proceeding with trade."
         )
-    if meta_class <= rr_thresh:
-        logger.info(
-            f"{symbol}: Alert — Meta Predicted Sell {meta_class:.2f}:1RR which is below RR threshold "
-            
-        )
-        return
+
+    # if log_returns >= -0.0001:
+    #     logger.info(
+    #         f"{symbol}: Alert skipping trade log returns too  high"      
+    #     )
+    #     return
+    META_CONF_THRESH = {1: 0.85, 2: 0.85}
+    if meta_class in META_CONF_THRESH:
+        if meta_probs[meta_class] < META_CONF_THRESH[meta_class]:
+            logger.info(
+                f"{symbol}: Buy skipped — Meta class {meta_class} prob {meta_probs[meta_class]:.2f} "
+                f"below threshold {META_CONF_THRESH[meta_class]}"
+            )
+            return  
+
 
     # === Trade Prices ===
-    trigger_price = curr["Low"]
+    trigger_price = curr["Close"]
     sl_price = curr["stop_loss_price"]
     sl_dist = sl_price - trigger_price
     tp_price = trigger_price - (sl_dist * meta_class)  # final_class = TP multiplier
@@ -1633,14 +1635,16 @@ def sellM5(df_sell, response_data, symbol):
         f"{'-'*42}\n"
         f"✅ ML SELL SIGNAL (5m) {symbol}\n"
         f"🎯 Entry      : {curr['entry_price']:.5f}\n"
-        f"🛡️  StopLoss   : {sl_price:.5f}\n"
+        f"🛡️ StopLoss   : {sl_price:.5f}\n"
         f"📈 TakeProfit : {tp_price:.5f} (x{meta_class})\n"
         f"🤖 Pred RR    : {rr_pred:.2f}\n"
         f"📊 Classifier Probs:\n"
         f"   ├─ 1:1 : {clf_probs.get('clf_1_1_prob', 0):.2f}\n"
         f"   ├─ 1:2 : {clf_probs.get('clf_1_2_prob', 0):.2f}\n"
-        f"   └─ 1:3 : {clf_probs.get('clf_1_3_prob', 0):.2f}\n"
-        f"📊 Meta Probabilities: {meta_probs}\n"
+        f"📊 Meta Probabilities:\n"
+        f"   ├─ Reject : {meta_probs[0]:.2f}\n"
+        f"   ├─ 1:1    : {meta_probs[1]:.2f}\n"
+        f"   └─ 1:2    : {meta_probs[2]:.2f}\n"
         f"📊 Candle:\n"
         f"   ├─ Open   : {curr['Open']:.5f}\n"
         f"   ├─ High   : {curr['High']:.5f}\n"
@@ -1670,10 +1674,48 @@ def send_telegram_message(text):
     except requests.exceptions.RequestException as e:
         print(f"🚨 Telegram request failed: {e}")
 
-def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
+import os
+
+csv_write_lock = threading.Lock()
+def save_prediction_row_async(row_data: pd.Series, symbol: str, base_path: str = "latest_predictions", max_rows: int = 20000):
+    def save():
+        try:
+            os.makedirs(base_path, exist_ok=True)
+            csv_path = os.path.join(base_path, f"{symbol.upper()}.csv")
+
+            # Wrap row into a DataFrame
+            row = pd.DataFrame([row_data])
+
+            with csv_write_lock:
+                if os.path.exists(csv_path):
+                    existing = pd.read_csv(csv_path)
+
+                    row = row.reindex(columns=existing.columns, fill_value=None)
+
+                    is_duplicate = (
+                        not existing.empty and
+                        existing.iloc[0:1].drop(columns=["timestamp"], errors="ignore").equals(
+                            row.iloc[0:1].drop(columns=["timestamp"], errors="ignore")
+                        )
+                    )
+
+                    if not is_duplicate:
+                        new_df = pd.concat([row, existing], ignore_index=True)
+                        new_df = new_df.head(max_rows)
+                        new_df.to_csv(csv_path, index=False)
+                else:
+                    row.to_csv(csv_path, index=False)
+
+        except Exception as e:
+            print(f"⚠️ Threaded CSV write failed for {symbol}: {e}")
+
+    threading.Thread(target=save).start()
+
+def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy",
+                    save_csv=False, csv_path="latest_predictions.csv", max_rows=20000):
     """
     Full stacked prediction pipeline:
-    - 3 Base Classifiers → Regression → Meta (Multi-Class) → Final Decision
+    - 2 Base Classifiers → Regression → Meta (Multi-Class) → Final Decision
     """
     if not isinstance(features, pd.DataFrame):
         print(f"❌ 'features' must be a DataFrame for {symbol}")
@@ -1687,7 +1729,6 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
         models = {
             "clf_1_1_prob": loaded_models[f"clf_{trade_type}_1.1"],
             "clf_1_2_prob": loaded_models[f"clf_{trade_type}_1.2"],
-            "clf_1_3_prob": loaded_models[f"clf_{trade_type}_1.3"],
             "reg_pred": loaded_models[f"reg_{trade_type}"],
             "meta": loaded_models[f"meta_{trade_type}"]
         }
@@ -1695,7 +1736,6 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
         print(f"❌ Missing models for {trade_type.upper()}: {e}")
         return None
 
-    # ===== DIAGNOSTIC SETUP =====
     result = {
         "symbol": symbol,
         "trade_type": trade_type,
@@ -1707,8 +1747,8 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
     }
 
     try:
-        # === Predict probabilities from 3 base classifiers ===
-        for clf_key in ["clf_1_1_prob", "clf_1_2_prob", "clf_1_3_prob"]:
+        # === Predict classifier probabilities ===
+        for clf_key in ["clf_1_1_prob", "clf_1_2_prob"]:
             clf_model = models[clf_key]
             clf_cols = clf_model.feature_name()
             clf_input = features.reindex(columns=clf_cols, fill_value=0)
@@ -1717,36 +1757,37 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
                 print(f"⚠️ {clf_key} feature count mismatch. Expected {len(clf_cols)}, got {clf_input.shape[1]}")
                 continue
 
-            prob = float(clf_model.predict(clf_input)[0])
-            result["classifier_probs"][clf_key] = prob
+            prob = clf_model.predict(clf_input)
+            # Ensure we get a single float value
+            if isinstance(prob, (np.ndarray, list)):
+                prob = float(prob[0])
+            result["classifier_probs"][clf_key] = float(prob)
 
-        # === Prepare input for Regressor ===
+        # === Predict regression output ===
         reg_model = models["reg_pred"]
         reg_cols = reg_model.feature_name()
         reg_input = features.copy()
         reg_input["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
         reg_input["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
-        reg_input["clf_1_3_prob"] = result["classifier_probs"].get("clf_1_3_prob", 0.0)
-
-
         reg_input_aligned = reg_input.reindex(columns=reg_cols, fill_value=0)
 
         if reg_input_aligned.shape[1] != len(reg_cols):
             print(f"⚠️ Regressor feature count mismatch. Expected {len(reg_cols)}, got {reg_input_aligned.shape[1]}")
             return result
 
-        reg_value = float(reg_model.predict(reg_input_aligned)[0])
-        result["reg_pred"] = reg_value
+        reg_value = reg_model.predict(reg_input_aligned)
+        # Ensure we get a single float value
+        if isinstance(reg_value, (np.ndarray, list)):
+            reg_value = float(reg_value[0])
+        result["reg_pred"] = float(reg_value)
 
-        # === Prepare input for Meta Model ===
+        # === Predict meta classification ===
         meta_model = models["meta"]
         meta_cols = meta_model.feature_name()
         meta_input = features.copy()
-        meta_input["clf_1_1_prob"] = result["classifier_probs"].get("clf_1.1", 0.0)
-        meta_input["clf_1_2_prob"] = result["classifier_probs"].get("clf_1.2", 0.0)
-        meta_input["clf_1_3_prob"] = result["classifier_probs"].get("clf_1.3", 0.0)
+        meta_input["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
+        meta_input["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
         meta_input["reg_pred"] = reg_value
-        
         meta_input_aligned = meta_input.reindex(columns=meta_cols, fill_value=0)
 
         if meta_input_aligned.shape[1] != len(meta_cols):
@@ -1755,7 +1796,8 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
 
         meta_raw = meta_model.predict(meta_input_aligned)
         meta_class = int(np.argmax(meta_raw))
-        meta_probs = meta_raw.tolist()
+        meta_probs = meta_raw.flatten().tolist()
+
 
         result["final_class"] = meta_class
         result["class_probabilities"] = meta_probs
@@ -1766,13 +1808,28 @@ def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy"):
         else:
             print(f"🔕 {symbol} {trade_type.upper()} rejected → Class {meta_class} | R:R: {reg_value:.2f}")
 
+        # === Optional threaded CSV saving ===
+        if save_csv:
+            try:
+                row_data = features.iloc[0].copy()  # Use first row if multiple rows
+                row_data["timestamp"] = pd.Timestamp.utcnow()
+                row_data["symbol"] = symbol
+                row_data["trade_type"] = trade_type
+                row_data["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
+                row_data["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
+                row_data["reg_pred"] = reg_value
+                row_data["meta_class"] = meta_class
+                row_data["accepted"] = result["accepted"]
+
+                save_prediction_row_async(row_data=row_data, symbol=symbol, base_path="latest_predictions", max_rows=max_rows)
+            except Exception as e:
+                print(f"⚠️ Failed to prepare prediction row for {symbol}: {e}")
+
         return result
 
     except Exception as e:
         print(f"❌ Pipeline error: {type(e).__name__} - {str(e)}")
         return None
-
-
 # === CONFIG ===
 SYMBOLS = ["GBPUSD+", "USDCAD+"] #"USDJPY+","XAUUSD+", 
 
@@ -1790,7 +1847,7 @@ latest_features = {}
 feature_lock = threading.Lock()
 thread_map = {}  
 executors = {}  
-resource_log_interval = 300  # Log resources every 5 minutes
+resource_log_interval = 3600  # Log resources every 5 minutes
 last_resource_log = 0
 
 # === Configure Logging ===
@@ -1920,7 +1977,7 @@ def symbol_loop(symbol):
             if df_buy.iloc[-2]["side"] == 1:
                 buy_row = df_buy.iloc[[-2]].copy()
                 buy_row["pair"] = pd.Categorical([pair_code], categories=PAIR_CATS)
-                prediction = get_predictions(buy_row, symbol, trade_type="buy")
+                prediction = get_predictions(buy_row, symbol, trade_type="buy", save_csv=True)
                 if prediction and prediction.get("accepted"):
                     response_data["buy"] = prediction
                     buyM5(df_buy, response_data, symbol)
@@ -1931,7 +1988,7 @@ def symbol_loop(symbol):
             if df_sell.iloc[-2]["side"] == 0:
                 sell_row = df_sell.iloc[[-2]].copy()
                 sell_row["pair"] = pd.Categorical([pair_code], categories=PAIR_CATS)
-                prediction = get_predictions(sell_row, symbol, trade_type="sell")
+                prediction = get_predictions(sell_row, symbol, trade_type="sell", save_csv=True)
                 if prediction and prediction.get("accepted"):
                     response_data["sell"] = prediction
                     sellM5(df_sell, response_data, symbol)
@@ -1939,11 +1996,13 @@ def symbol_loop(symbol):
                     trading_logger.info(f"[{symbol}] 🚫 Sell rejected or not valid")
 
 
-            threading.Thread(
-                target=send_telegram_message,
-                args=(f"[{symbol}] ✅ Done in {elapsed:.2f}s",),
-                daemon=True
-            ).start()
+            if elapsed >= 5:
+                threading.Thread(
+                    target=send_telegram_message,
+                    args=(f"[{symbol}] ✅ Done in {elapsed:.2f}s",),
+                    daemon=True
+                ).start()
+
 
         except Exception as e:
             trading_logger.exception(f"[{symbol}] ❌ Loop error: {e}")

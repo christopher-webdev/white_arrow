@@ -4,10 +4,9 @@ import pandas as pd
 
 # Confusion matrix from meta classifier
 conf_matrix = np.array([
- [6999, 1660,  738,  880],
- [1091, 2131,  745,  345],
- [ 318,  448, 1358,  553],
- [ 326,  194,  460, 3739],
+[603, 111,  19],
+ [141, 265,   9],
+ [ 88, 112, 452,]
 ])
 
 # R-multiples per class
@@ -15,17 +14,17 @@ rr_values = {
     0: 0,    # Reject (no trade)
     1: 1,    # 1:1
     2: 2,    # 1:2
-    3: 3     # 1:3
+    # 3: 3     # 1:3
 }
 
 # Simulate PnL
 total_trades = 0
 total_pnl = 0
 
-for actual in range(4):
-    for predicted in range(4):
+for actual in range(3):
+    for predicted in range(3):
         count = conf_matrix[actual, predicted]
-        if predicted == 0 or predicted ==1:
+        if predicted == 0 or predicted == 1:
             continue  # No trade taken
         elif actual == predicted:
             total_pnl += count * rr_values[predicted]  # Correct prediction

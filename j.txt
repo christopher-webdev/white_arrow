@@ -1,469 +1,400 @@
 
-=== COMPREHENSIVE   SELL MODEL EVALUATION ===
+===buy  COMPREHENSIVE MODEL EVALUATION ===
 
 
 🔹 Binary Classifier 1:1 RR Evaluation:
 ----------------------------------------
-ROC AUC: 0.8054
-Accuracy: 0.7305
-F1 Score: 0.7545
+ROC AUC: 0.9962
+Accuracy: 0.9569
+F1 Score: 0.9626
 
 Confusion Matrix:
-[[6957 3320]
- [2605 9103]]
+[[430  32]
+ [ 14 592]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-    Negative       0.73      0.68      0.70     10277
-    Positive       0.73      0.78      0.75     11708
+    Negative       0.97      0.93      0.95       462
+    Positive       0.95      0.98      0.96       606
 
-    accuracy                           0.73     21985
-   macro avg       0.73      0.73      0.73     21985
-weighted avg       0.73      0.73      0.73     21985
+    accuracy                           0.96      1068
+   macro avg       0.96      0.95      0.96      1068
+weighted avg       0.96      0.96      0.96      1068
 
 
 🔹 Binary Classifier 1:2 RR Evaluation:
 ----------------------------------------
-ROC AUC: 0.8798
-Accuracy: 0.8090
-F1 Score: 0.6525
+ROC AUC: 0.9947
+Accuracy: 0.9663
+F1 Score: 0.9598
 
 Confusion Matrix:
-[[13842   747]
- [ 3453  3943]]
+[[602  18]
+ [ 18 430]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-    Negative       0.80      0.95      0.87     14589
-    Positive       0.84      0.53      0.65      7396
+    Negative       0.97      0.97      0.97       620
+    Positive       0.96      0.96      0.96       448
 
-    accuracy                           0.81     21985
-   macro avg       0.82      0.74      0.76     21985
-weighted avg       0.81      0.81      0.80     21985
-
-
-🔹 Binary Classifier 1:3 RR Evaluation:
-----------------------------------------
-ROC AUC: 0.8628
-Accuracy: 0.8298
-F1 Score: 0.3841
-
-Confusion Matrix:
-[[17076   190]
- [ 3552  1167]]
-
-Classification Report:
-              precision    recall  f1-score   support
-
-    Negative       0.83      0.99      0.90     17266
-    Positive       0.86      0.25      0.38      4719
-
-    accuracy                           0.83     21985
-   macro avg       0.84      0.62      0.64     21985
-weighted avg       0.83      0.83      0.79     21985
+    accuracy                           0.97      1068
+   macro avg       0.97      0.97      0.97      1068
+weighted avg       0.97      0.97      0.97      1068
 
 
 🔹 Regression Model Evaluation:
 ----------------------------------------
-MAE: 0.5810
-RMSE: 0.7991
-R²: 0.5160
+MAE: 0.1090
+RMSE: 0.2567
+R²: 0.8904
 
 🔹 Meta Model Evaluation:
 ----------------------------------------
               precision    recall  f1-score   support
 
-      Reject     0.8014    0.6810    0.7363     10277
-         1:1     0.4807    0.4942    0.4874      4312
-         1:2     0.4114    0.5073    0.4543      2677
-         1:3     0.6777    0.7923    0.7306      4719
+      Reject     0.9395    0.9831    0.9608       474
+         1:1     0.8889    0.8767    0.8828       146
+         1:2     0.9813    0.9375    0.9589       448
 
-    accuracy                         0.6471     21985
-   macro avg     0.5928    0.6187    0.6021     21985
-weighted avg     0.6644    0.6471    0.6519     21985
+    accuracy                         0.9494      1068
+   macro avg     0.9366    0.9324    0.9342      1068
+weighted avg     0.9501    0.9494    0.9493      1068
 
 
 Confusion Matrix:
-[[6999 1660  738  880]
- [1091 2131  745  345]
- [ 318  448 1358  553]
- [ 326  194  460 3739]]
+[[466   6   2]
+ [ 12 128   6]
+ [ 18  10 420]]
 
 Training final models on all data...
 
 All models trained and saved successfully!
-=== END COMPREHENSIVE   SELL MODEL EVALUATION ===
 
+📊 Feature Importances:
 
-
-
-
-
-
-
-
-=== COMPREHENSIVE MODEL EVALUATION ===
-
-
-🔹 Binary Classifier 1:1 RR Evaluation:
-----------------------------------------
-ROC AUC: 0.7778
-Accuracy: 0.7075
-F1 Score: 0.7544
-
-Confusion Matrix:
-[[5692 4127]
- [2320 9902]]
-
-Classification Report:
-              precision    recall  f1-score   support
-
-    Negative       0.71      0.58      0.64      9819
-    Positive       0.71      0.81      0.75     12222
-
-    accuracy                           0.71     22041
-   macro avg       0.71      0.69      0.70     22041
-weighted avg       0.71      0.71      0.70     22041
-
-
-🔹 Binary Classifier 1:2 RR Evaluation:
-----------------------------------------
-ROC AUC: 0.8409
-Accuracy: 0.7722
-F1 Score: 0.6100
-
-Confusion Matrix:
-[[13094  1102]
- [ 3919  3926]]
-
-Classification Report:
-              precision    recall  f1-score   support
-
-    Negative       0.77      0.92      0.84     14196
-    Positive       0.78      0.50      0.61      7845
-
-    accuracy                           0.77     22041
-   macro avg       0.78      0.71      0.72     22041
-weighted avg       0.77      0.77      0.76     22041
-
-
-🔹 Binary Classifier 1:3 RR Evaluation:
-----------------------------------------
-ROC AUC: 0.8627
-Accuracy: 0.8178
-F1 Score: 0.3706
-
-Confusion Matrix:
-[[16844   180]
- [ 3835  1182]]
-
-Classification Report:
-              precision    recall  f1-score   support
-
-    Negative       0.81      0.99      0.89     17024
-    Positive       0.87      0.24      0.37      5017
-
-    accuracy                           0.82     22041
-   macro avg       0.84      0.61      0.63     22041
-weighted avg       0.83      0.82      0.77     22041
-
-
-🔹 Regression Model Evaluation:
-----------------------------------------
-MAE: 0.6291
-RMSE: 0.8315
-R²: 0.4835
-
-🔹 Meta Model Evaluation:
-----------------------------------------
-              precision    recall  f1-score   support
-
-      Reject     0.7848    0.6365    0.7029      9819
-         1:1     0.4669    0.4179    0.4410      4377
-         1:2     0.3568    0.5484    0.4323      2828
-         1:3     0.6745    0.7815    0.7241      5017
-
-    accuracy                         0.6148     22041
-   macro avg     0.5708    0.5961    0.5751     22041
-weighted avg     0.6417    0.6148    0.6210     22041
-
-
-Confusion Matrix:
-[[6250 1570 1120  879]
- [1094 1829 1027  427]
- [ 319  372 1551  586]
- [ 301  146  649 3921]]
-
-Training final models on all data...
-
-All models trained and saved successfully!
-(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Regression Evaluation:
-MAE: 0.9173
-RMSE: 1.0420
-R²: 0.2397
-
-Base Classifier Evaluation:
-Accuracy: 0.7342
-F1 Score: 0.4176
-ROC AUC: 0.7681
-Confusion Matrix:
-[[11873   644]
- [ 4294  1770]]
-
-Meta Classifier Evaluation:
-Accuracy: 0.7544
-F1 Score: 0.5915
-ROC AUC: 0.7988
-Confusion Matrix:
-[[10715  1802]
- [ 2761  3303]]
-
-Training final models on all data...
-Saving models...
-
-Feature Importances:
 
 Regression Model Feature Importance:
+          Feature  Importance
+281  clf_1_2_prob         263
+280  clf_1_1_prob         151
+55      rsi_slope          46
+200   kurtosis_20          45
+126    OC_ratio_3          44
+93            OBV          42
+204   price_slope          41
+136      volume_z          41
+65      cci_slope          39
+182   range_spike          39
+
+Classifier (1_1) Feature Importance:
                 Feature  Importance
-93                  OBV         226
-161       MACD_Std_1day         204
-160        RSI_Std_1day         181
-158       RSI_Mean_1day         171
-159      MACD_Mean_1day         165
-275  stop_loss_distance         116
-6              hour_cos         107
-214     cum_log_returns         106
-154         RSI_Std_4hr          94
-155        MACD_Std_4hr          88
+159      MACD_Mean_1day          89
+161       MACD_Std_1day          74
+93                  OBV          70
+158       RSI_Mean_1day          57
+157     MACD_Slope_1day          56
+55            rsi_slope          53
+275  stop_loss_distance          53
+155        MACD_Std_4hr          52
+200         kurtosis_20          50
+91     adx_slope_std_10          49
 
-Classifier Model Feature Importance:
-                Feature  Importance
-93                  OBV         207
-161       MACD_Std_1day         180
-160        RSI_Std_1day         178
-159      MACD_Mean_1day         148
-158       RSI_Mean_1day         141
-154         RSI_Std_4hr          81
-44              SMA_200          80
-214     cum_log_returns          74
-275  stop_loss_distance          69
-35              SMA_100          67
-
-Meta Model Feature Importance:
-             Feature  Importance
-282         reg_pred         304
-55         rsi_slope         205
-283         clf_prob         202
-204      price_slope          86
-93               OBV          83
-177       upper_wick          66
-161    MACD_Std_1day          64
-159   MACD_Mean_1day          63
-6           hour_cos          59
-86   MACD_Line_Slope          52
-
-All models trained and saved successfully!
-(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 
-
-
-Regression Evaluation:
-MAE: 0.9134
-RMSE: 1.0392
-R²: 0.2431
-
-Base Classifier Evaluation:
-Accuracy: 0.7293
-F1 Score: 0.4024
-ROC AUC: 0.7595
-Confusion Matrix:
-[[11829   642]
- [ 4375  1689]]
-
-Meta Classifier Evaluation:
-Accuracy: 0.7520
-F1 Score: 0.5894
-ROC AUC: 0.7991
-Confusion Matrix:
-[[10638  1833]
- [ 2764  3300]]
-
-Training final models on all data...
-Saving models...
-
-Feature Importances:
-
-Regression Model Feature Importance:
-                   Feature  Importance
-93                     OBV         242
-160           RSI_Std_1day         199
-161          MACD_Std_1day         174
-159         MACD_Mean_1day         137
-158          RSI_Mean_1day         134
-214        cum_log_returns         105
-154            RSI_Std_4hr          96
-61   rsi_above_65_duration          94
-6                 hour_cos          93
-44                 SMA_200          86
-
-Classifier Model Feature Importance:
-                   Feature  Importance
-93                     OBV         218
-161          MACD_Std_1day         180
-160           RSI_Std_1day         174
-159         MACD_Mean_1day         135
-158          RSI_Mean_1day         114
-214        cum_log_returns         104
-44                 SMA_200          97
-35                 SMA_100          91
-61   rsi_above_65_duration          82
-89                     adx          80
+Classifier (1_2) Feature Importance:
+                  Feature  Importance
+161         MACD_Std_1day         169
+159        MACD_Mean_1day         115
+93                    OBV         103
+160          RSI_Std_1day          96
+44                SMA_200          86
+45   SMA_200_pct_distance          84
+95         obv_pct_change          75
+158         RSI_Mean_1day          73
+155          MACD_Std_4hr          73
+55              rsi_slope          69
 
 Meta Model Feature Importance:
             Feature  Importance
-283        clf_prob         205
-282        reg_pred         191
-55        rsi_slope         183
-178      lower_wick         102
-204     price_slope          98
-93              OBV          88
-161   MACD_Std_1day          86
-159  MACD_Mean_1day          69
-158   RSI_Mean_1day          61
-54       rsi_change          54
-
-All models trained and saved successfully!
+282        reg_pred         286
+280    clf_1_1_prob         164
+281    clf_1_2_prob         137
+208    max_drawdown          39
+217  god_oscillator          34
+127      OC_ratio_4          29
+201   volatility_10          28
+89              adx          27
+178      lower_wick          25
+55        rsi_slope          25
 (venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 
-
-stacked_trader_model.py
-├── load_and_label_data()
-├── extract_features()
-├── train_classifiers()
-├── train_regressor()
-├── train_meta_models()
-├── evaluate_models()
-├── visualize_results()
-└── main()
-
 
 === COMPREHENSIVE MODEL EVALUATION ===
 
 
 🔹 Binary Classifier 1:1 RR Evaluation:
 ----------------------------------------
-ROC AUC: 0.7264
-Accuracy: 0.6710
-F1 Score: 0.7320
+ROC AUC: 0.9908
+Accuracy: 0.9626
+F1 Score: 0.9673
 
 Confusion Matrix:
-[[2041 1900]
- [1130 4139]]
+[[438  22]
+ [ 18 591]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-    Negative       0.64      0.52      0.57      3941
-    Positive       0.69      0.79      0.73      5269
+    Negative       0.96      0.95      0.96       460
+    Positive       0.96      0.97      0.97       609
 
-    accuracy                           0.67      9210
-   macro avg       0.66      0.65      0.65      9210
-weighted avg       0.67      0.67      0.66      9210
+    accuracy                           0.96      1069
+   macro avg       0.96      0.96      0.96      1069
+weighted avg       0.96      0.96      0.96      1069
 
 
 🔹 Binary Classifier 1:2 RR Evaluation:
 ----------------------------------------
-ROC AUC: 0.7645
-Accuracy: 0.7099
-F1 Score: 0.4983
+ROC AUC: 0.9946
+Accuracy: 0.9775
+F1 Score: 0.9740
 
 Confusion Matrix:
-[[5211  653]
- [2019 1327]]
+[[595  10]
+ [ 14 450]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-    Negative       0.72      0.89      0.80      5864
-    Positive       0.67      0.40      0.50      3346
+    Negative       0.98      0.98      0.98       605
+    Positive       0.98      0.97      0.97       464
 
-    accuracy                           0.71      9210
-   macro avg       0.70      0.64      0.65      9210
-weighted avg       0.70      0.71      0.69      9210
-
-
-🔹 Binary Classifier 1:3 RR Evaluation:
-----------------------------------------
-ROC AUC: 0.8150
-Accuracy: 0.8088
-F1 Score: 0.3514
-
-Confusion Matrix:
-[[6972  123]
- [1638  477]]
-
-Classification Report:
-              precision    recall  f1-score   support
-
-    Negative       0.81      0.98      0.89      7095
-    Positive       0.80      0.23      0.35      2115
-
-    accuracy                           0.81      9210
-   macro avg       0.80      0.60      0.62      9210
-weighted avg       0.81      0.81      0.76      9210
+    accuracy                           0.98      1069
+   macro avg       0.98      0.98      0.98      1069
+weighted avg       0.98      0.98      0.98      1069
 
 
 🔹 Regression Model Evaluation:
 ----------------------------------------
-MAE: 0.7573
-RMSE: 0.9915
-R²: 0.2428
+MAE: 0.1097
+RMSE: 0.2659
+R²: 0.8828
 
 🔹 Meta Model Evaluation:
 ----------------------------------------
               precision    recall  f1-score   support
 
-      Reject     0.6460    0.5676    0.6043      3941
-         1:1     0.3700    0.3812    0.3755      1923
-         1:2     0.2523    0.3859    0.3051      1231
-         1:3     0.6012    0.5352    0.5663      2115
+      Reject     0.9302    0.9659    0.9477       469
+         1:1     0.7838    0.8529    0.8169       136
+         1:2     1.0000    0.9353    0.9666       464
 
-    accuracy                         0.4970      9210
-   macro avg     0.4674    0.4675    0.4628      9210
-weighted avg     0.5254    0.4970    0.5078      9210
+    accuracy                         0.9383      1069
+   macro avg     0.9047    0.9181    0.9104      1069
+weighted avg     0.9419    0.9383    0.9393      1069
 
 
 Confusion Matrix:
-[[2237  794  561  349]
- [ 619  733  393  178]
- [ 269  263  475  224]
- [ 338  191  454 1132]]
+[[453  16   0]
+ [ 20 116   0]
+ [ 14  16 434]]
 
 Training final models on all data...
 
 All models trained and saved successfully!
-(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ python pf.py
-   Total Trades Taken  Total R  Average R per Trade
-0                3766     2187             0.580722
-(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ python mc-tr.py
-Killed
-(
+
+📊 Feature Importances:
+
+
+Regression Model Feature Importance:
+                     Feature  Importance
+281             clf_1_2_prob         279
+280             clf_1_1_prob         149
+56           rsi_slope_std_5          48
+204              price_slope          47
+55                 rsi_slope          45
+213  smoothed_acceleration_5          43
+96                 obv_slope          41
+161            MACD_Std_1day          40
+197                 kurtosis          37
+93                       OBV          34
+
+Classifier (1_1) Feature Importance:
+                Feature  Importance
+161       MACD_Std_1day         107
+93                  OBV          83
+89                  adx          77
+275  stop_loss_distance          74
+154         RSI_Std_4hr          73
+204         price_slope          73
+160        RSI_Std_1day          70
+200         kurtosis_20          68
+158       RSI_Mean_1day          67
+199         skewness_20          66
+
+Classifier (1_2) Feature Importance:
+                   Feature  Importance
+161          MACD_Std_1day         117
+93                     OBV          68
+159         MACD_Mean_1day          66
+35                 SMA_100          59
+158          RSI_Mean_1day          56
+61   rsi_above_65_duration          54
+160           RSI_Std_1day          53
+45    SMA_200_pct_distance          52
+89                     adx          48
+154            RSI_Std_4hr          46
+
+Meta Model Feature Importance:
+              Feature  Importance
+282          reg_pred         539
+281      clf_1_2_prob         311
+280      clf_1_1_prob         170
+80   macd_hist_zscore          61
+124        OC_ratio_1          52
+204       price_slope          40
+137      volume_slope          35
+203       kurtosis_10          34
+130    Close_Change_2          33
+91   adx_slope_std_10          30
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ Buy
+
+
+
+
+
+
+
+
+sell
+=== COMPREHENSIVE MODEL EVALUATION ===
+
+
+🔹 Binary Classifier 1:1 RR Evaluation:
+----------------------------------------
+ROC AUC: 0.9965
+Accuracy: 0.9607
+F1 Score: 0.9660
+
+Confusion Matrix:
+[[430  32]
+ [ 10 596]]
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Negative       0.98      0.93      0.95       462
+    Positive       0.95      0.98      0.97       606
+
+    accuracy                           0.96      1068
+   macro avg       0.96      0.96      0.96      1068
+weighted avg       0.96      0.96      0.96      1068
+
+
+🔹 Binary Classifier 1:2 RR Evaluation:
+----------------------------------------
+ROC AUC: 0.9872
+Accuracy: 0.9625
+F1 Score: 0.9548
+
+Confusion Matrix:
+[[606  14]
+ [ 26 422]]
+
+Classification Report:
+              precision    recall  f1-score   support
+
+    Negative       0.96      0.98      0.97       620
+    Positive       0.97      0.94      0.95       448
+
+    accuracy                           0.96      1068
+   macro avg       0.96      0.96      0.96      1068
+weighted avg       0.96      0.96      0.96      1068
+
+
+🔹 Regression Model Evaluation:
+----------------------------------------
+MAE: 0.0957
+RMSE: 0.2474
+R²: 0.8982
+
+🔹 Meta Model Evaluation:
+----------------------------------------
+              precision    recall  f1-score   support
+
+      Reject     0.9634    0.9430    0.9531       474
+         1:1     0.8645    0.9178    0.8904       146
+         1:2     0.9577    0.9598    0.9588       448
+
+    accuracy                         0.9466      1068
+   macro avg     0.9285    0.9402    0.9341      1068
+weighted avg     0.9475    0.9466    0.9469      1068
+
+
+Confusion Matrix:
+[[447  13  14]
+ [  7 134   5]
+ [ 10   8 430]]
+
+Training final models on all data...
+
+All models trained and saved successfully!
+
+📊 Feature Importances:
+
+
+Regression Model Feature Importance:
+                     Feature  Importance
+281             clf_1_2_prob         329
+280             clf_1_1_prob         166
+160             RSI_Std_1day          60
+197                 kurtosis          59
+92           adx_slope_std_5          57
+200              kurtosis_20          56
+126               OC_ratio_3          55
+136                 volume_z          55
+213  smoothed_acceleration_5          53
+91          adx_slope_std_10          53
+
+Classifier (1_1) Feature Importance:
+            Feature  Importance
+161   MACD_Std_1day          74
+159  MACD_Mean_1day          73
+155    MACD_Std_4hr          52
+55        rsi_slope          51
+93              OBV          50
+160    RSI_Std_1day          49
+156  RSI_Slope_1day          49
+204     price_slope          44
+158   RSI_Mean_1day          42
+200     kurtosis_20          39
+
+Classifier (1_2) Feature Importance:
+            Feature  Importance
+161   MACD_Std_1day         142
+93              OBV         119
+159  MACD_Mean_1day         100
+160    RSI_Std_1day          83
+95   obv_pct_change          71
+89              adx          70
+155    MACD_Std_4hr          69
+35          SMA_100          64
+44          SMA_200          63
+156  RSI_Slope_1day          59
+
+Meta Model Feature Importance:
+                  Feature  Importance
+282              reg_pred         362
+281          clf_1_2_prob         220
+280          clf_1_1_prob         209
+122            MACD_Line4          60
+95         obv_pct_change          53
+45   SMA_200_pct_distance          40
+37    SMA_100_slope_diff5          38
+275    stop_loss_distance          29
+57       rsi_slope_std_10          28
+59                rsi_std          27
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ `
+
+this is the sell
+
+
+
