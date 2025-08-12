@@ -196,43 +196,6 @@ def calculate_indicators(df):
     df['pain_ratio'] = df['Low'].rolling(5).min().pct_change() / (df['High'].rolling(5).max().pct_change() + 1e-6)
     df['gain_ratio'] = df['High'].rolling(5).max().pct_change() / (df['Low'].rolling(5).min().pct_change() + 1e-6)
 
-
-    # === 18) Ichimoku‐Derived Features (unchanged) ===
-    # def compute_ichimoku_features_from_5m(df: pd.DataFrame) -> pd.DataFrame:
-    #     timeframes = {'15min': 3, '1h': 12, '4h': 48, '1d': 288}
-    #     ichimoku = ta.trend.IchimokuIndicator(
-    #         high=df['High'], low=df['Low'], window1=9, window2=26, window3=52
-    #     )
-    #     df['Tenkan']   = ichimoku.ichimoku_conversion_line()
-    #     df['Kijun']    = ichimoku.ichimoku_base_line()
-        # df['Senkou_A'] = ichimoku.ichimoku_a()
-        # df['Senkou_B'] = ichimoku.ichimoku_b()
-        # df['tenkan_kijun_delta'] = df['Tenkan'] - df['Kijun']
-
-        # for label, window in timeframes.items():
-        #     df[f'{label}_tk_delta_slope']       = (df['tenkan_kijun_delta'] - df['tenkan_kijun_delta'].shift(window)) / window
-        #     df[f'{label}_tk_delta_mean']        = df['tenkan_kijun_delta'].rolling(window).mean()
-        #     df[f'{label}_tk_delta_std']         = df['tenkan_kijun_delta'].rolling(window).std()
-        #     df[f'{label}_tk_delta_pct_rank']    = df['tenkan_kijun_delta'].rank(pct=True).rolling(window).apply(lambda x: x[-1], raw=True)
-
-    #     return df
-    # df = compute_ichimoku_features_from_5m(df)
-
-    df['feat_c1_lt_pre_s9']   = (df['Close'].shift(1) < df['SMA_9'].shift(1)).astype(int)
-    df['feat_c0_gt_s9']       = (df['Close'] > df['SMA_9']).astype(int)
-    df['feat_o1_gt_c1']       = (df['Open'].shift(1) > df['Close'].shift(1)).astype(int)
-    df['feat_o0_lt_c0']       = (df['Open'] < df['Close']).astype(int)
-
-    df['feat_c1_lt_pre_s20']  = (df['Close'].shift(1) < df['SMA_20'].shift(1)).astype(int)
-    df['feat_c0_gt_s20']      = (df['Close'] > df['SMA_20']).astype(int)
-
-    # Optional: also include cross-related features
-    df['feat_cross_above_s9']  = ((df['Close'].shift(1) < df['SMA_9'].shift(1)) & (df['Close'] > df['SMA_9'])).astype(int)
-    df['feat_cross_above_s20'] = ((df['Close'].shift(1) < df['SMA_20'].shift(1)) & (df['Close'] > df['SMA_20'])).astype(int)
-
-    df['feat_cross_below_s9']  = ((df['Close'].shift(1) > df['SMA_9'].shift(1)) & (df['Close'] < df['SMA_9'])).astype(int)
-    df['feat_cross_below_s20'] = ((df['Close'].shift(1) > df['SMA_20'].shift(1)) & (df['Close'] < df['SMA_20'])).astype(int)
-
     df['gk']      = (df['gain_ratio'].shift(1) > df['gain_ratio']).astype(int)
     df['pn']      = (df['pain_ratio'].shift(1) > df['gain_ratio']).astype(int)
 
@@ -292,8 +255,8 @@ def calculate_indicators(df):
         df['lower_wick'] = df[['Close', 'Open']].min(axis=1) - df['Low']
         df['candle_range'] = df['High'] - df['Low']
 
-        df['bull_count'] = (df['Close'] > df['Open']).rolling(5).sum()
-        df['bear_count'] = (df['Close'] < df['Open']).rolling(5).sum()
+        df['bull_count'] = (df['Close'] > df['Open']).rolling(3).sum()
+        df['bear_count'] = (df['Close'] < df['Open']).rolling(3).sum()
         df['momentum_unbalance'] = df['bull_count'] - df['bear_count']
         df.drop(columns=['bull_count', 'bear_count'], inplace=True)
 
@@ -341,109 +304,173 @@ def calculate_indicators(df):
     df['returns'] = df['Close'].pct_change()
     df['rolling_std'] = df['returns'].rolling(5).std()
     df['god_oscillator'] = (
-        0.6 * df['rsi_slope'] * 10 +
-        0.4 * (df['obv_slope'] / (df['rolling_std'] + 1e-6))
+        0.5 * df['rsi_slope'] * 10 +
+        0.5 * (df['obv_slope'] / (df['rolling_std'] + 1e-6))
     )
 
-    def add_candlestick_features(df):
-        # === 1. Range-bound Detection ===
-        def is_range_bound(window=5, threshold=0.015):
-            max_high = df['High'].rolling(window).max()
-            min_low = df['Low'].rolling(window).min()
-            range_pct = (max_high - min_low) / df['Close']
+    def add_candlestick_features(df,
+                            range_thr=0.002,   # ~0.2% for FX 5m; try 0.003–0.006 for XAUUSD
+                            cluster_window=10,
+                            cluster_lookback=200,
+                            cluster_q=0.20):
+        EPS = 1e-9
+
+        # === 1) Range-bound Detection (percent-of-price) ===
+        def is_range_bound(window=5, threshold=range_thr):
+            max_high = df['High'].rolling(window, min_periods=window).max()
+            min_low  = df['Low'].rolling(window,  min_periods=window).min()
+            range_pct = (max_high - min_low) / (df['Close'].abs() + EPS)
             return (range_pct < threshold).astype(int)
 
-        df['range_5'] = is_range_bound(14)
-        df['range_10'] = is_range_bound(48)
+        df['range_5']  = is_range_bound(5)
+        df['range_10'] = is_range_bound(10)
 
-        # === 2. Engulfing Patterns ===
+        # === 2) Engulfing Patterns ===
         df['bullish_engulf'] = (
-        (df['Close'].shift(1) < df['Open'].shift(1)) &
-        (df['Close'] > df['Open']) &
-        (df['Close'] > df['Open'].shift(1)) &
-        (df['Open'] < df['Close'].shift(1))
+            (df['Close'].shift(1) < df['Open'].shift(1)) &
+            (df['Close'] > df['Open']) &
+            (df['Close'] > df['Open'].shift(1)) &
+            (df['Open']  < df['Close'].shift(1))
         ).astype(int)
 
         df['bearish_engulf'] = (
-        (df['Close'].shift(1) > df['Open'].shift(1)) &
-        (df['Close'] < df['Open']) &
-        (df['Open'] > df['Close'].shift(1)) &
-        (df['Close'] < df['Open'].shift(1))
+            (df['Close'].shift(1) > df['Open'].shift(1)) &
+            (df['Close'] < df['Open']) &
+            (df['Open']  > df['Close'].shift(1)) &
+            (df['Close'] < df['Open'].shift(1))
         ).astype(int)
 
-        # === 3. Pin Bar Detection ===
-        body = abs(df['Close'] - df['Open'])
-        range_ = df['High'] - df['Low']
-        upper_wick = df['High'] - df[['Close', 'Open']].max(axis=1)
-        lower_wick = df[['Close', 'Open']].min(axis=1) - df['Low']
-        df['pin_bar'] = ((body / range_ < 0.3) & ((upper_wick > 2 * body) | (lower_wick > 2 * body))).astype(int)
+        # === 3) Pin Bar Detection ===
+        body = (df['Close'] - df['Open']).abs()
+        rng  = (df['High'] - df['Low']).clip(lower=EPS)
+        upper_wick = df['High'] - df[['Close','Open']].max(axis=1)
+        lower_wick = df[['Close','Open']].min(axis=1) - df['Low']
+        df['pin_bar'] = ((body / rng < 0.3) & ((upper_wick > 2*body) | (lower_wick > 2*body))).astype(int)
 
-        # === 4. Inside/Outside Bars ===
-        df['inside_bar'] = ((df['High'] < df['High'].shift(1)) & (df['Low'] > df['Low'].shift(1))).astype(int)
+        # === 4) Inside / Outside Bars ===
+        df['inside_bar']  = ((df['High'] < df['High'].shift(1)) & (df['Low'] > df['Low'].shift(1))).astype(int)
         df['outside_bar'] = ((df['High'] > df['High'].shift(1)) & (df['Low'] < df['Low'].shift(1))).astype(int)
 
-        # === 5. Clustering / Candle Compression ===
-        def cluster_score(window=10, threshold=0.01):
-            max_high = df['High'].rolling(window).max()
-            min_low = df['Low'].rolling(window).min()
-            spread = (max_high - min_low) / df['Close']
-            return (spread < threshold).astype(int)
+        # === 5) Clustering / Candle Compression (percentile-based, adaptive) ===
+        def cluster_score_pctile(window=cluster_window, lookback=cluster_lookback, q=cluster_q):
+            win_max = df['High'].rolling(window, min_periods=window).max()
+            win_min = df['Low'].rolling(window,  min_periods=window).min()
+            rng = win_max - win_min
+            thr = rng.rolling(lookback, min_periods=lookback).quantile(q)
+            return (rng <= thr).astype(int)
 
-        df['cluster_10'] = cluster_score(14)
+        df['cluster_10'] = cluster_score_pctile()
 
-        # === Add memory with lag features (shifts) ===
-        features_to_shift = ['range_5', 'range_10', 'bullish_engulf', 'bearish_engulf',
-                    'pin_bar', 'inside_bar', 'outside_bar', 'cluster_10']
-
+        # === Lag features (short memory) ===
+        features_to_shift = ['range_5','range_10','bullish_engulf','bearish_engulf',
+                            'pin_bar','inside_bar','outside_bar','cluster_10']
         for f in features_to_shift:
-            for lag in range(1, 6):  # shift 1 to 5
+            for lag in range(1, 3):   # lags 1 and 2
                 df[f'{f}_lag{lag}'] = df[f].shift(lag).fillna(0).astype(int)
 
         return df
+
     df = add_candlestick_features(df)
 
-    def detect_bos(df, lookback=22):
-        bos_up = []
-        bos_down = []
+    def _atr14(df):
+        prev_close = df['Close'].shift(1)
+        tr = np.maximum(df['High'] - df['Low'],
+                        np.maximum((df['High'] - prev_close).abs(),
+                                (df['Low'] - prev_close).abs()))
+        return tr.rolling(14, min_periods=1).mean()
 
-        for i in range(len(df)):
-            if i < lookback:
-                bos_up.append(0)
-                bos_down.append(0)
-                continue
+    def detect_bos(df, lookback=60, swing_k=2, min_break_atr=0.25, confirm_with_close=True):
+        """
+        5m-friendly BOS:
+        - lookback: bars to look back for last swing (60 ~= 5h)
+        - swing_k: fractal strength (2 = 2 bars on each side)
+        - min_break_atr: close/high must exceed last swing by this many ATRs
+        - confirm_with_close: True = use Close to confirm, else use High/Low
+        Creates df['BoS_Up'], df['BoS_Down'] in-place.
+        """
+        atr = _atr14(df).ffill()
 
-            recent_highs = df['High'].iloc[i-lookback:i]
-            recent_lows = df['Low'].iloc[i-lookback:i]
-            bos_up.append(int(df['High'].iloc[i] > recent_highs.max()))
-            bos_down.append(int(df['Low'].iloc[i] < recent_lows.min()))
+        # Fractal swing points (vectorized, center-rolling)
+        win = 2 * swing_k + 1
+        sw_hi = (df['High'] == df['High'].rolling(win, center=True).max()).astype(int)
+        sw_lo = (df['Low']  == df['Low'].rolling(win, center=True).min()).astype(int)
 
-        df['BoS_Up'] = bos_up
-        df['BoS_Down'] = bos_down
+        # Last swing price memory (forward fill)
+        last_sw_hi_price = df['High'].where(sw_hi.eq(1)).ffill()
+        last_sw_lo_price = df['Low'].where(sw_lo.eq(1)).ffill()
 
-    df['SMA_9_lt_SMA_20'] = (df['SMA_9'] < df['SMA_20']).astype(int)
+        # Bars since last swing index
+        idx = np.arange(len(df))
+        last_sw_hi_idx = np.where(sw_hi.values==1, idx, np.nan)
+        last_sw_lo_idx = np.where(sw_lo.values==1, idx, np.nan)
+        last_sw_hi_idx = pd.Series(last_sw_hi_idx).ffill().values
+        last_sw_lo_idx = pd.Series(last_sw_lo_idx).ffill().values
+
+        bars_since_hi = idx - np.nan_to_num(last_sw_hi_idx, nan=-1)
+        bars_since_lo = idx - np.nan_to_num(last_sw_lo_idx, nan=-1)
+
+        # Confirmation price
+        up_price  = df['Close'] if confirm_with_close else df['High']
+        down_price= df['Close'] if confirm_with_close else df['Low']
+
+        # BOS conditions: break by >= min_break_atr * ATR and last swing is within lookback
+        bos_up = (
+            (bars_since_hi > 0) & (bars_since_hi <= lookback) &
+            (up_price >= (last_sw_hi_price + min_break_atr * atr))
+        ).astype(int)
+
+        bos_down = (
+            (bars_since_lo > 0) & (bars_since_lo <= lookback) &
+            (down_price <= (last_sw_lo_price - min_break_atr * atr))
+        ).astype(int)
+
+        df['BoS_Up'] = bos_up.fillna(0).astype(int)
+        df['BoS_Down'] = bos_down.fillna(0).astype(int)
+        return df
+
+
     from scipy.signal import find_peaks
 
-    def detect_double_top_bottom(df, distance=22, threshold=0.002):
+    def detect_double_top_bottom(df, distance=18, tol_atr_mult=0.25, min_sep_bars=12):
+        """
+        5m-friendly DT/DB:
+        - distance: min bars between detected peaks/troughs (18 ~= 90 min)
+        - tol_atr_mult: two peaks are 'equal' if |Δprice| <= tol_atr_mult * ATR at the 2nd peak
+        - min_sep_bars: additional guard for minimum spacing
+        Creates df['Double_Top'], df['Double_Bottom'] in-place.
+        """
+        atr = _atr14(df).ffill()
         highs = df['High'].values
-        lows = df['Low'].values
+        lows  = df['Low'].values
 
+        # Peaks and troughs
         peaks, _ = find_peaks(highs, distance=distance)
         troughs, _ = find_peaks(-lows, distance=distance)
 
-        dt_mask = np.zeros(len(df))
-        db_mask = np.zeros(len(df))
+        dt_mask = np.zeros(len(df), dtype=int)
+        db_mask = np.zeros(len(df), dtype=int)
 
+        # Double Top: adjacent peaks with similar heights (ATR tolerance)
         for i in range(1, len(peaks)):
-            if abs(highs[peaks[i]] - highs[peaks[i - 1]]) / highs[peaks[i]] < threshold:
-                dt_mask[peaks[i]] = 1
+            p1, p2 = peaks[i-1], peaks[i]
+            if (p2 - p1) < min_sep_bars: 
+                continue
+            tol = tol_atr_mult * atr.iloc[p2]
+            if np.abs(highs[p2] - highs[p1]) <= float(tol):
+                dt_mask[p2] = 1
 
+        # Double Bottom: adjacent troughs with similar depths (ATR tolerance)
         for i in range(1, len(troughs)):
-            if abs(lows[troughs[i]] - lows[troughs[i - 1]]) / lows[troughs[i]] < threshold:
-                db_mask[troughs[i]] = 1
+            t1, t2 = troughs[i-1], troughs[i]
+            if (t2 - t1) < min_sep_bars: 
+                continue
+            tol = tol_atr_mult * atr.iloc[t2]
+            if np.abs(lows[t2] - lows[t1]) <= float(tol):
+                db_mask[t2] = 1
 
-        df['Double_Top'] = dt_mask.astype(int)
-        df['Double_Bottom'] = db_mask.astype(int)
-
+        df['Double_Top'] = dt_mask
+        df['Double_Bottom'] = db_mask
+        return df
 
     def candles_since_bollinger_touch(df):
         last_touch_upper = np.full(len(df), np.nan)
@@ -463,11 +490,173 @@ def calculate_indicators(df):
 
         df['Candles_Since_BB_Upper'] = last_touch_upper
         df['Candles_Since_BB_Lower'] = last_touch_lower
+        return df
 
+    def label_choch_from_bos(df, lookback=100):
+        """
+        Marks the first opposite-direction break as CHoCH.
+        Requires df['BoS_Up'] and df['BoS_Down'] (0/1) already computed.
+        - lookback: only consider flips where the previous BOS happened within N bars.
+        Creates: CHoCH_Up, CHoCH_Down (0/1)
+        """
+        bos_dir = np.where(df['BoS_Up'].astype(int)==1, 1,
+                np.where(df['BoS_Down'].astype(int)==1, -1, 0))
+        idx = np.arange(len(df))
 
-    detect_bos(df, lookback=22)
-    detect_double_top_bottom(df)
-    candles_since_bollinger_touch(df)
+        last_dir = pd.Series(bos_dir).replace(0, np.nan).ffill().shift(1)
+        last_idx = pd.Series(np.where(bos_dir!=0, idx, np.nan)).ffill().shift(1)
+
+        within = (idx - last_idx) <= lookback
+
+        choch_up = (df['BoS_Up'].astype(int)==1) & (last_dir==-1) & within
+        choch_down = (df['BoS_Down'].astype(int)==1) & (last_dir== 1) & within
+
+        df['CHoCH_Up'] = choch_up.astype(int)
+        df['CHoCH_Down'] = choch_down.astype(int)
+        return df
+
+    def _atr(df, n=14):
+        pc = df['Close'].shift(1)
+        tr = np.maximum(df['High'] - df['Low'],
+                np.maximum((df['High'] - pc).abs(), (df['Low'] - pc).abs()))
+        return tr.rolling(n, min_periods=1).mean()
+
+    def label_hh_hl_lh_ll(df, k=2):
+        """
+        Fractal swing highs/lows and next-swing relationship:
+        HH/HL/LH/LL columns (0/1)
+        k=2 -> swing needs 2 bars on each side.
+        """
+        win = 2*k + 1
+        sh = (df['High'] == df['High'].rolling(win, center=True).max()).astype(int)
+        sl = (df['Low']  == df['Low'].rolling(win, center=True).min()).astype(int)
+
+        # record last swing highs/lows values & side
+        last_sh_val = df['High'].where(sh.eq(1)).ffill()
+        last_sl_val = df['Low'].where(sl.eq(1)).ffill()
+        last_swing  = np.where(sh.eq(1),  1, np.where(sl.eq(1), -1, np.nan))
+        last_swing  = pd.Series(last_swing).ffill()
+
+        # next swing relative to the previous swing of the same type
+        # build series of swing-only rows
+        swings = df.assign(sw_type=np.where(sh.eq(1),1,np.where(sl.eq(1),-1,0)),
+                        sw_price=np.where(sh.eq(1), df['High'],
+                                    np.where(sl.eq(1), df['Low'], np.nan)))
+        swings = swings[swings['sw_type']!=0].copy()
+
+        # compare consecutive swings
+        swings['prev_type']  = swings['sw_type'].shift(1)
+        swings['prev_price'] = swings['sw_price'].shift(1)
+
+        swings['HH'] = ((swings['sw_type']==1) & (swings['prev_type']==1) &
+                        (swings['sw_price'] > swings['prev_price'])).astype(int)
+        swings['HL'] = ((swings['sw_type']==-1) & (swings['prev_type']==-1) &
+                        (swings['sw_price'] > swings['prev_price'])).astype(int)
+        swings['LH'] = ((swings['sw_type']==1) & (swings['prev_type']==1) &
+                        (swings['sw_price'] < swings['prev_price'])).astype(int)
+        swings['LL'] = ((swings['sw_type']==-1) & (swings['prev_type']==-1) &
+                        (swings['sw_price'] < swings['prev_price'])).astype(int)
+
+        # map back to full df index
+        df['HH'] = 0; df['HL'] = 0; df['LH'] = 0; df['LL'] = 0
+        df.loc[swings.index, ['HH','HL','LH','LL']] = swings[['HH','HL','LH','LL']].values
+        return df
+
+    def detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True):
+        """
+        SFP_Up: takes out previous swing high by wick, closes back below (uptrap).
+        SFP_Down: takes out previous swing low, closes back above (downtrap).
+        """
+        atr = _atr(df).ffill()
+        win = 2*k + 1
+        swing_high = (df['High'] == df['High'].rolling(win, center=True).max())
+        swing_low  = (df['Low']  == df['Low'].rolling(win, center=True).min())
+
+        last_sh = df['High'].where(swing_high).ffill()
+        last_sl = df['Low'].where(swing_low).ffill()
+
+        tol_up = tol_atr_mult * atr
+        tol_dn = tol_atr_mult * atr
+
+        # price pokes above last swing high by >= tol, but fails
+        if confirm_with_close:
+            sfp_up = (df['High'] >= last_sh + tol_up) & (df['Close'] < last_sh)
+            sfp_dn = (df['Low']  <= last_sl - tol_dn) & (df['Close'] > last_sl)
+        else:
+            sfp_up = (df['High'] >= last_sh + tol_up) & (df['High']  < last_sh + 2*tol_up)
+            sfp_dn = (df['Low']  <= last_sl - tol_dn) & (df['Low']   > last_sl - 2*tol_dn)
+
+        df['SFP_Up'] = sfp_up.fillna(False).astype(int)
+        df['SFP_Down'] = sfp_dn.fillna(False).astype(int)
+        return df
+
+    def detect_fvg(df, min_atr_mult=0.1):
+        """
+        3-candle FVG:
+        Bull FVG when: Low[n] > High[n-2]  (gap) and body is impulsive
+        Bear FVG when: High[n] < Low[n-2]
+        min_atr_mult filters tiny gaps.
+        """
+        atr = _atr(df).ffill()
+        high_m2 = df['High'].shift(2)
+        low_m2  = df['Low'].shift(2)
+
+        bull_gap = (df['Low'] > high_m2)
+        bear_gap = (df['High'] < low_m2)
+
+        # width threshold
+        bull_w = (df['Low'] - high_m2)
+        bear_w = (low_m2 - df['High'])
+
+        bull_fvg = bull_gap & (bull_w >= min_atr_mult * atr)
+        bear_fvg = bear_gap & (bear_w >= min_atr_mult * atr)
+
+        df['FVG_Up'] = bull_fvg.fillna(False).astype(int)
+        df['FVG_Down'] = bear_fvg.fillna(False).astype(int)
+        return df
+
+    def detect_break_retest(df, lookahead=12, tol_atr_mult=0.25):
+        """
+        After a BOS, mark a retest of the breakout level within 'lookahead' bars.
+        Requires df['BoS_Up'] / df['BoS_Down'] (0/1).
+        """
+        atr = _atr(df).ffill()
+        ret_up = np.zeros(len(df), dtype=int)
+        ret_dn = np.zeros(len(df), dtype=int)
+
+        # breakout levels: last swing that was broken
+        last_high = df['High'].cummax()  # simple proxy; replace with stored swing if you have it
+        last_low  = (-df['Low']).cummax() * -1
+
+        for i in range(len(df)):
+            if df['BoS_Up'].iloc[i] == 1:
+                level = last_high.iloc[i]
+                tol = float(tol_atr_mult * atr.iloc[i])
+                hi = min(len(df), i + lookahead + 1)
+                # retest if price trades back to level +/- tol
+                if (df['Low'].iloc[i+1:hi] <= level + tol).any():
+                    ret_up[i] = 1
+
+            if df['BoS_Down'].iloc[i] == 1:
+                level = last_low.iloc[i]
+                tol = float(tol_atr_mult * atr.iloc[i])
+                hi = min(len(df), i + lookahead + 1)
+                if (df['High'].iloc[i+1:hi] >= level - tol).any():
+                    ret_dn[i] = 1
+
+        df['Retest_Up'] = ret_up
+        df['Retest_Down'] = ret_dn
+        return df
+
+    df = detect_bos(df, lookback=60, swing_k=2, min_break_atr=0.25, confirm_with_close=True)
+    df = detect_double_top_bottom(df, distance=18, tol_atr_mult=0.25, min_sep_bars=12)
+    df = candles_since_bollinger_touch(df)
+    df = label_choch_from_bos(df, lookback=100)
+    df = label_hh_hl_lh_ll(df, k=2)
+    df = detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True)
+    df = detect_fvg(df, min_atr_mult=0.1)
+    df = detect_break_retest(df, lookahead=12, tol_atr_mult=0.25)
+
 
     df['entry_price']        = 0.0
     df['stop_loss_price']    = 0.0
@@ -475,19 +664,20 @@ def calculate_indicators(df):
     df['sl_ratio_to_entry']  = 0.0
     df['side']               = -1
     
-    vol_window = 50
+    vol_window = 15
     df['volatility'] = df['log_returns'].rolling(vol_window).std()
 
 
     # Drop rows with NaNs in critical columns
-    df = df.dropna(subset=ohlc_cols)
+    # df = df.dropna(subset=ohlc_cols)
 
-    # Compute volatility (rolling standard deviation of returns)
+    # # Compute volatility (rolling standard deviation of returns)
     
-    # Drop initial NaNs
-    df.dropna(inplace=True)
+    # # Drop initial NaNs
+    # df.dropna(inplace=True)
 
-    df = df.dropna().reset_index(drop=True)
+    # df = df.dropna().reset_index(drop=True)
+    df = df.iloc[300:].reset_index(drop=True)
    
     return df
 
@@ -554,10 +744,7 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             sides.append(-1)
             continue
         
-
-        # log_ret_threshold = -0.000105  # negative value now
-        if df['log_returns'].iloc[i] <= 0.0001:
-        # if df['log_returns'].iloc[i] <= log_ret_threshold:
+        if df['log_returns'].iloc[i] <= 0.0002 and  df['SMA_200'].iloc[i] >=  df['Low'].iloc[i]:
             labels.append(np.nan)
             rr_labels.append(np.nan)
             entry_prices.append(np.nan)
@@ -592,34 +779,36 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             sides.append(1)
             continue
 
-        # --- Simulate price movement ---
+        
+        # --- Simulate price movement (fix: use Low for SL, High for TP) ---
         label = 0
         max_rr = -np.inf  # Track max RR achieved
 
         for j in range(1, horizon + 1):
-            future_price = df['High'].iloc[i + j]  # Use High for longs (price rises)
+            fp_high = float(df['High'].iloc[i + j])
+            fp_low  = float(df['Low'].iloc[i + j])
 
             # Stop Loss Hit (price drops to SL)
-            if future_price <= sl:
+            if fp_low <= sl:
                 rr = -1.0
                 max_rr = max(max_rr, rr)
                 label = -1
                 break
 
             # Take Profit Hit (price rises to TP)
-            if future_price >= tp:
+            if fp_high >= tp:
                 rr = pt_mult
                 max_rr = max(max_rr, rr)
                 label = 1
                 break
 
-            # Neither hit → update max RR
-            rr = (future_price - entry) / (entry - sl + EPS)
+            # Neither hit → update max RR (optimistic mark-to-high)
+            rr = (fp_high - entry) / (entry - sl + EPS)
             max_rr = max(max_rr, rr)
 
-        # Save results (NO ROUNDING)
+        # Save results
         labels.append(label)
-        rr_labels.append(max_rr)  # Continuous RR value
+        rr_labels.append(max_rr)
         entry_prices.append(entry)
         stop_loss_prices.append(sl)
         stop_loss_distances.append(sl_dist)
@@ -628,7 +817,7 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
 
     # --- Assign to DataFrame ---
     df['label'] = labels
-    df['rr_label'] = rr_labels  # Continuous RR values
+    df['rr_label'] = rr_labels
     df['entry_price'] = entry_prices
     df['stop_loss_price'] = stop_loss_prices
     df['stop_loss_distance'] = stop_loss_distances
@@ -637,7 +826,6 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
 
     return df
 
-
 def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizon=None, rr_threshold=None):
     EPS = 1e-9
 
@@ -645,27 +833,20 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
     pair_code = os.path.splitext(os.path.basename(file))[0].lower()
     df['pair'] = pair_code
 
+    # Mirror long: same instruments & bounds
     spread_limits_low = {
-        
         "gbpusd": 0.00050,
         "usdcad": 0.00050,
-        "audusd": 0.00050,
-       
-       
+        "xauusd": 01.0000,
     }
     spread_limits_high = {
-     
-         
         "gbpusd": 0.00350,
         "usdcad": 0.00350,
-        "audusd": 0.00350,
-       
-        
+        "xauusd": 09.0000,
     }
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"No spread limits defined for pair '{pair_code}'")
 
-    
     labels = []
     rr_labels = []
     entry_prices = []
@@ -674,8 +855,10 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
     sl_ratios = []
     sides = []
 
-    for i in tqdm(range(len(df)), desc='Sim short trades'):
-        if i > len(df) - horizon - 1 or not df['valid_hour'].iloc[i]:
+    for i in tqdm(range(len(df)), desc='Sim SHORT trades'):
+
+        # Not enough future candles to simulate
+        if i > len(df) - horizon - 1:
             labels.append(np.nan)
             rr_labels.append(np.nan)
             entry_prices.append(np.nan)
@@ -685,9 +868,8 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
             sides.append(-1)
             continue
 
-        # Skip if log return doesn't meet threshold
-        log_ret_threshold = -0.0001
-        if df['log_returns'].iloc[i] >= log_ret_threshold:
+        # Must be during valid hour
+        if not df['valid_hour'].iloc[i]:
             labels.append(np.nan)
             rr_labels.append(np.nan)
             entry_prices.append(np.nan)
@@ -697,15 +879,29 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
             sides.append(-1)
             continue
 
-        entry = df['Close'].iloc[i]
-        vol = df['volatility'].iloc[i]
-        sl = entry + sl_mult * vol  # SL above entry for shorts
-        sl_dist = sl - entry
-        tp = entry - pt_mult * sl_dist  # TP below entry
+        if df['log_returns'].iloc[i] >= -0.0002 and df['SMA_200'].iloc[i] <= df['High'].iloc[i]:
+            labels.append(np.nan)
+            rr_labels.append(np.nan)
+            entry_prices.append(np.nan)
+            stop_loss_prices.append(np.nan)
+            stop_loss_distances.append(np.nan)
+            sl_ratios.append(np.nan)
+            sides.append(-1)
+            continue
 
-        
         spread_low = spread_limits_low[pair_code]
         spread_high = spread_limits_high[pair_code]
+
+        # --- Trade setup ---
+        entry = df['Close'].iloc[i]
+        vol = df['volatility'].iloc[i]
+
+        # Stop Loss (above entry for shorts)
+        sl = entry + sl_mult * vol
+        sl_dist = sl - entry  # Positive distance
+
+        # Take Profit (below entry)
+        tp = entry - pt_mult * sl_dist
 
         # Skip if SL distance is outside spread limits
         if sl_dist < spread_low or sl_dist > spread_high:
@@ -715,45 +911,47 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
             sl_ratios.append(np.nan)
-            sides.append(-1)
+            sides.append(-1)  # mirror long: mark intended side but skip this trade
             continue
 
+        # --- Simulate price movement (use High for SL, Low for TP) ---
         label = 0
         max_rr = -np.inf  # Track max RR achieved
 
         for j in range(1, horizon + 1):
-            future_price = df['Low'].iloc[i + j]  # Use Low for shorts
+            fp_high = float(df['High'].iloc[i + j])
+            fp_low  = float(df['Low'].iloc[i + j])
 
             # Stop Loss Hit (price rises to SL)
-            if future_price >= sl:
+            if fp_high >= sl:
                 rr = -1.0
                 max_rr = max(max_rr, rr)
                 label = -1
                 break
 
             # Take Profit Hit (price drops to TP)
-            if future_price <= tp:
+            if fp_low <= tp:
                 rr = pt_mult
                 max_rr = max(max_rr, rr)
                 label = 1
                 break
 
-            # Neither hit → update max RR
-            rr = (entry - future_price) / (sl - entry + EPS)
+            # Neither hit → update max RR (optimistic mark-to-low for shorts)
+            rr = (entry - fp_low) / (sl - entry + EPS)
             max_rr = max(max_rr, rr)
 
-        # Save results (NO ROUNDING)
+        # Save results
         labels.append(label)
-        rr_labels.append(max_rr)  # Keep full precision
+        rr_labels.append(max_rr)
         entry_prices.append(entry)
         stop_loss_prices.append(sl)
         stop_loss_distances.append(sl_dist)
         sl_ratios.append(sl_dist / (entry + EPS))
-        sides.append(-1)  # Mark as short trade
+        sides.append(0)  # 0 = short trade
 
-    # Assign to DataFrame
+    # --- Assign to DataFrame ---
     df['label'] = labels
-    df['rr_label'] = rr_labels  # Now continuous
+    df['rr_label'] = rr_labels
     df['entry_price'] = entry_prices
     df['stop_loss_price'] = stop_loss_prices
     df['stop_loss_distance'] = stop_loss_distances
@@ -762,11 +960,28 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
 
     return df
 
-def generate_rr_classification_labels(df):
-    df['label_rr_1.0'] = (df['rr_label'] >= 1.05).astype(int)
-    df['label_rr_2.0'] = (df['rr_label'] >= 2.0).astype(int)
-    # df['label_rr_3.0'] = (df['rr_label'] >= 3.0).astype(int)
-    return df
+
+# def generate_rr_classification_labels(df):
+#     df['label_rr_1.0'] = (df['rr_label'] >= 1.1).astype(int)
+#     df['label_rr_2.0'] = (df['rr_label'] >= 2.0).astype(int)
+#     # df['label_rr_3.0'] = (df['rr_label'] >= 3.0).astype(int)
+#     return df
+# def generate_rr_classification_labels(df, thr1=1.0, thr2=2.0):
+#     """
+#     Creates:
+#       - y_ge_1R, y_ge_2R (binary, overlapping: multi-label style)
+#       - y_meta (exclusive multiclass: 0=<1R, 1=1–<2R, 2=≥2R)
+#     """
+#     rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
+
+#     # Multi-label thresholds (overlapping)
+#     df['y_ge_1R'] = (rr >= thr1).astype('int8')
+#     df['y_ge_2R'] = (rr >= thr2).astype('int8')
+
+#     # Exclusive multiclass
+#     df['y_meta'] = np.where(rr >= thr2, 2,
+#                      np.where(rr >= thr1, 1, 0)).astype('int8')
+#     return df
 
 
 def label_short_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
@@ -775,7 +990,7 @@ def label_short_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
     df.dropna(subset=['label'], inplace=True)
     # df['pair'] = df['pair'].astype('category')
     
-    df = generate_rr_classification_labels(df)
+    # df = generate_rr_classification_labels(df)
     df_valid = df[df['valid_hour']].copy()
     print(df_valid.head())
 
@@ -823,7 +1038,7 @@ def label_long_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
     df.dropna(subset=['label'], inplace=True)
     # df['pair'] = df['pair'].astype('category')
 
-    df = generate_rr_classification_labels(df)
+    # df = generate_rr_classification_labels(df)
     df_valid = df[df['valid_hour']].copy()
 
     print(df_valid.head())
@@ -843,7 +1058,7 @@ def label_long_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
     neutral_rate = neutrals / total_trades * 100 if total_trades else 0
 
     # Expectancy
-    RR_levels = [2]
+    RR_levels = [1]
     expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1) for rr in RR_levels}
 
     # 📊 Print Summary
@@ -865,18 +1080,18 @@ def label_long_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
 
     return df_valid
 
-def load_and_label_data(csv_files, save_path="testsell.csv"):
+def load_and_label_data(csv_files, save_path="test-combined.csv"):
     all_trades = []
 
     for file in csv_files:
         print(f"\n📂 Processing {file}")
         try:
             df = pd.read_csv(file)
-            short_trades = label_short_trades(df.copy(), file, pt_mult=2, sl_mult=4, horizon=100, rr_threshold=2)
+            short_trades = label_short_trades(df.copy(), file, pt_mult=2.0, sl_mult=6, horizon=100, rr_threshold=2)
          
-            #   long_trades = label_long_trades(df.copy(), file, pt_mult=2, sl_mult=4, horizon=100, rr_threshold=2)
+            long_trades = label_long_trades(df.copy(), file, pt_mult=2.0, sl_mult=6, horizon=100, rr_threshold=2)
 
-            both = pd.concat([short_trades], ignore_index=True)#short_trades,
+            both = pd.concat([short_trades, long_trades], ignore_index=True)#short_trades,
             print(f"✅ {file} → {len(both)} trades labeled")
             all_trades.append(both)
 

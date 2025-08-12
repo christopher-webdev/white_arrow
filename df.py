@@ -24,4 +24,4 @@ def format_csv_features_to_file(csv_file_path, output_file):
     print(f"Formatted features saved to {output_file}")
 
 # Example usage:
-format_csv_features_to_file('classified_regression_data_sell2.csv', 'formatted_features.txt')
+format_csv_features_to_file('testsell.csv', 'formatted_features.txt')

@@ -25,5 +25,5 @@
 "bullish_engulf_lag5", "bearish_engulf_lag1", "bearish_engulf_lag2", "bearish_engulf_lag3", "bearish_engulf_lag4", "bearish_engulf_lag5", "pin_bar_lag1", "pin_bar_lag2", "pin_bar_lag3", "pin_bar_lag4",
 "pin_bar_lag5", "inside_bar_lag1", "inside_bar_lag2", "inside_bar_lag3", "inside_bar_lag4", "inside_bar_lag5", "outside_bar_lag1", "outside_bar_lag2", "outside_bar_lag3", "outside_bar_lag4",
 "outside_bar_lag5", "cluster_10_lag1", "cluster_10_lag2", "cluster_10_lag3", "cluster_10_lag4", "cluster_10_lag5", "SMA_9_lt_SMA_20", "BoS_Up", "BoS_Down", "Double_Top",
-"Double_Bottom", "Candles_Since_BB_Upper", "Candles_Since_BB_Lower", "entry_price", "stop_loss_price", "stop_loss_distance", "sl_ratio_to_entry", "side", "volatility", "filter_pass_long",
-"filter_pass_short", "pair", "label", "rr_label"
+"Double_Bottom", "Candles_Since_BB_Upper", "Candles_Since_BB_Lower", "entry_price", "stop_loss_price", "stop_loss_distance", "sl_ratio_to_entry", "side", "volatility", "pair",
+"label", "rr_label", "label_rr_1.0", "label_rr_2.0"

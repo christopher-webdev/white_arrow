@@ -1,0 +1,20 @@
+app/
+  main.py
+  models.py
+  auth.py
+  db.py
+  settings.py
+  requirements.txt
+public/
+  index.html
+
+
+fastapi==0.115.4
+uvicorn==0.30.6
+pydantic==2.9.2
+SQLAlchemy==2.0.36
+python-dotenv==1.0.1
+PyJWT==2.9.0
+passlib[bcrypt]==1.7.4
+
+

@@ -1,0 +1,109 @@
+
+=== BINARY 1:1 ===
+ROC AUC: 0.9603794633081411
+Accuracy: 0.889935132872986
+F1: 0.8871728871728872
+[[2185  241]
+ [ 285 2068]]
+              precision    recall  f1-score   support
+
+         <1R       0.88      0.90      0.89      2426
+        >=1R       0.90      0.88      0.89      2353
+
+    accuracy                           0.89      4779
+   macro avg       0.89      0.89      0.89      4779
+weighted avg       0.89      0.89      0.89      4779
+
+
+=== BINARY 1:2 ===
+ROC AUC: 0.9913274401160637
+Accuracy: 0.9765641347562252
+F1: 0.9660400242571255
+[[3074   41]
+ [  71 1593]]
+              precision    recall  f1-score   support
+
+         <2R       0.98      0.99      0.98      3115
+        >=2R       0.97      0.96      0.97      1664
+
+    accuracy                           0.98      4779
+   macro avg       0.98      0.97      0.97      4779
+weighted avg       0.98      0.98      0.98      4779
+
+
+=== REGRESSOR (rr_label) ===
+MAE: 0.20690354686068974
+RMSE: 0.34654872418163185
+R2: 0.8103771749063848
+
+=== META (0=Reject,1=1:1,2=1:2) ===
+              precision    recall  f1-score   support
+
+      Reject     0.9498    0.9666    0.9581      2426
+         1:1     0.9337    0.9405    0.9371       689
+         1:2     0.9697    0.9417    0.9555      1664
+
+    accuracy                         0.9542      4779
+   macro avg     0.9511    0.9496    0.9502      4779
+weighted avg     0.9544    0.9542    0.9542      4779
+
+[[2345   38   43]
+ [  35  648    6]
+ [  89    8 1567]]
+
+Training final models on ALL data...
+
+✅ All models trained and saved successfully!
+Classifier 1:1 top10:
+                    Feature  Importance
+251        stop_loss_price        2175
+93                     OBV        1265
+151          MACD_Std_1day        1151
+254                   side        1013
+150           RSI_Std_1day         930
+149         MACD_Mean_1day         865
+45    SMA_200_pct_distance         859
+148          RSI_Mean_1day         787
+61   rsi_above_65_duration         726
+89                     adx         702 
+
+Classifier 1:2 top10:
+                    Feature  Importance
+251        stop_loss_price        1596
+254                   side         594
+93                     OBV         558
+151          MACD_Std_1day         446
+150           RSI_Std_1day         402
+148          RSI_Mean_1day         364
+149         MACD_Mean_1day         360
+45    SMA_200_pct_distance         323
+44                 SMA_200         302
+61   rsi_above_65_duration         295 
+
+Regressor top10:
+                   Feature  Importance
+257          clf_1_1_prob        1986
+258          clf_1_2_prob        1705
+151         MACD_Std_1day         378
+55              rsi_slope         359
+93                    OBV         351
+251       stop_loss_price         325
+194           price_slope         310
+45   SMA_200_pct_distance         291
+150          RSI_Std_1day         245
+190           kurtosis_20         238 
+
+Meta top10:
+               Feature  Importance
+259          reg_pred        1203
+257      clf_1_1_prob        1038
+258      clf_1_2_prob         681
+251   stop_loss_price         210
+151     MACD_Std_1day         121
+56    rsi_slope_std_5         109
+54         rsi_change          95
+90          adx_slope          91
+172       range_spike          88
+57   rsi_slope_std_10          85 
+
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 

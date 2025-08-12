@@ -7,3 +7,4 @@
 # Ignore virtual environment folder
 /venv
 /csv
+/node_modules

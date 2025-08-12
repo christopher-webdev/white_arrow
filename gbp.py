@@ -17,7 +17,14 @@ from datetime import timezone
 import lightgbm as lgb
 import psutil
 from multiprocessing import cpu_count
+from dotenv import load_dotenv
+import logging
+from pathlib import Path
 
+import shutil 
+from contextlib import contextmanager
+
+load_dotenv()
 
 # Fix UnicodeEncodeError on Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -25,21 +32,64 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
-# === Configure Logging ===
-logger = logging.getLogger()
+
+# === Configure Logging (Two Independent Loggers) ===
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+# Formats (customize if you like)
+APP_FORMAT = logging.Formatter("%(asctime)s - APP - %(levelname)s - %(message)s")
+TRADE_FORMAT = logging.Formatter("%(asctime)s - TRADE - %(levelname)s - %(message)s")
+
+# Named loggers (avoid using the root logger for both)
+logger = logging.getLogger("app")      # general app logger
+t_logger = logging.getLogger("trade")  # trade management logger
+
 logger.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-file_handler = logging.FileHandler("trade_management.log", encoding="utf-8")
-file_handler.setFormatter(formatter)
-file_handler.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(formatter)
-console_handler.setLevel(logging.INFO)
-if not logger.handlers:
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
+t_logger.setLevel(logging.INFO)
 
+# File handlers
+app_file_handler = logging.FileHandler(LOG_DIR / "app.log", encoding="utf-8")
+app_file_handler.setFormatter(APP_FORMAT)
+app_file_handler.setLevel(logging.INFO)
 
+trade_file_handler = logging.FileHandler(LOG_DIR / "trade_management.log", encoding="utf-8")
+trade_file_handler.setFormatter(TRADE_FORMAT)
+trade_file_handler.setLevel(logging.INFO)
+
+# Console handlers
+app_console_handler = logging.StreamHandler()
+app_console_handler.setFormatter(APP_FORMAT)
+app_console_handler.setLevel(logging.INFO)
+
+trade_console_handler = logging.StreamHandler()
+trade_console_handler.setFormatter(TRADE_FORMAT)
+trade_console_handler.setLevel(logging.INFO)
+
+# Avoid duplicate handlers on hot-reload / re-import
+if not any(
+    isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "").endswith("app.log")
+    for h in logger.handlers
+):
+    logger.addHandler(app_file_handler)
+if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+    logger.addHandler(app_console_handler)
+
+if not any(
+    isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "").endswith("trade_management.log")
+    for h in t_logger.handlers
+):
+    t_logger.addHandler(trade_file_handler)
+if not any(isinstance(h, logging.StreamHandler) for h in t_logger.handlers):
+    t_logger.addHandler(trade_console_handler)
+
+# Prevent propagation to root (avoids double logs)
+logger.propagate = False
+t_logger.propagate = False
+
+# === Usage examples ===
+logger.info("App started")
+t_logger.info("Trade manager initialized")
 
 risk_percent = 2  # Risk percentage for lot size calculation
 
@@ -51,23 +101,16 @@ last_trade_summary_time = 0
 TRADE_SUMMARY_INTERVAL = 5 * 60  # 5 minutes in seconds
 
 # Telegram Bot Details
-TELEGRAM_BOT_TOKEN = "8156645817:AAH_KHYsM_9OZ6Q7Uj55cJsyA6gZKybCp1s"
-CHAT_ID = "7050439107"
-TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 
+MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
+MT5_SERVER = os.getenv("MT5_SERVER", "")
 
-# MT5 Login Details)
-login = 6320145
-password = "c!*f$B4WYoyLW?!"
-server = "Bybit-Demo"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 MT5_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
-
-# #T5 Login Details
-# login = 6320176
-# password = "chosenONE1986@"
-# server = "Bybit-Live"
-# MT5_PATH = r"C:\Program Files\MetaTrader 52\terminal64.exe"
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 # === Load models  ===
 import lightgbm as lgb
@@ -89,18 +132,16 @@ def load_model(model_path, model_name=""):
 # ====== Model Registry ======
 MODELS = {
     # BUY side
-    "clf_buy_1.1": "./model_artifacts_buy/classifier_1_1.txt",
-    "clf_buy_1.2": "./model_artifacts_buy/classifier_1_2.txt",
-    # "clf_buy_1.3": "./model_artifacts_buy_1_1/classifier_1_3.txt",
-    "reg_buy": "./model_artifacts_buy/regressor.txt",
-    "meta_buy": "./model_artifacts_buy/meta_model.txt",
+    "clf_buy_1.1": "./tmodel_artifacts_buy/classifier_1_1.txt",
+    "clf_buy_1.2": "./tmodel_artifacts_buy/classifier_1_2.txt",
+    "reg_buy": "./tmodel_artifacts_buy/regressor.txt",
+    "meta_buy": "./tmodel_artifacts_buy/meta_model.txt",
 
     # SELL side
-    "clf_sell_1.1": "./model_artifacts_sell/classifier_1_1.txt",
-    "clf_sell_1.2": "./model_artifacts_sell/classifier_1_2.txt",
-    # "clf_sell_1.3": "./model_artifacts_sell_1_1/classifier_1_3.txt",
-    "reg_sell": "./model_artifacts_sell/regressor.txt",
-    "meta_sell": "./model_artifacts_sell/meta_model.txt"
+    "clf_sell_1.1": "./tmodel_artifacts_sell/classifier_1_1.txt",
+    "clf_sell_1.2": "./tmodel_artifacts_sell/classifier_1_2.txt",
+    "reg_sell": "./tmodel_artifacts_sell/regressor.txt",
+    "meta_sell": "./tmodel_artifacts_sell/meta_model.txt"
 }
 
 # ====== Load All ======
@@ -153,11 +194,11 @@ BROKER_TIME_OFFSET_MINUTES = -120
 
 # Function to send a Telegram message
 def send_telegram_message(message):
-    payload = {"chat_id": CHAT_ID, "text": message}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     requests.post(TELEGRAM_URL, json=payload)
 
 # Function to initialize MT5 
-def initialize_mt5(login, password, server):
+def initialize_mt5(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER):
     """Initialize MT5 and login with provided credentials."""
     if not mt5.initialize():
         error_message = "❌ MT5 Initialization Failed"
@@ -165,7 +206,7 @@ def initialize_mt5(login, password, server):
         send_telegram_message(error_message)
         return False
 
-    authorized = mt5.login(login, password=password, server=server)
+    authorized = mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
     
     if not authorized:
         error_message = f"❌ MT5 Login Failed: {mt5.last_error()}"
@@ -212,7 +253,7 @@ def fetch_candles(symbol, timeframe, num_candles):
     return df
 
 def calculate_features(df, direction=1, pair_code=None):
-  # Parse datetime column (adjust name if needed)
+    # Parse datetime column (adjust name if needed)
     df['Time'] = pd.to_datetime(df['Time'], format='%H:%M:%S')
     df['hour'] = df['Time'].dt.hour
 
@@ -222,8 +263,8 @@ def calculate_features(df, direction=1, pair_code=None):
     # df['is_tokyo_session']    = ((df['hour'] >=  2) & (df['hour'] <  9)).astype(int)
     # df['is_london_session']   = ((df['hour'] >=  8) & (df['hour'] < 17)).astype(int)
     # df['is_new_york_session'] = ((df['hour'] >= 16) & (df['hour'] < 22)).astype(int)
-    df['valid_hour'] = df['hour'].between(2, 20)
-    df.drop(columns=['Time', 'hour','real_volume','spread'], inplace=True)
+    df['valid_hour'] = df['hour'].between(2, 18)
+    df.drop(columns=['Time', 'hour'], inplace=True)
 
     # df.drop(columns=['Volume'], inplace=True)
     # Basic OHLC columns
@@ -399,43 +440,6 @@ def calculate_features(df, direction=1, pair_code=None):
     df['pain_ratio'] = df['Low'].rolling(5).min().pct_change() / (df['High'].rolling(5).max().pct_change() + 1e-6)
     df['gain_ratio'] = df['High'].rolling(5).max().pct_change() / (df['Low'].rolling(5).min().pct_change() + 1e-6)
 
-
-    # === 18) Ichimoku‐Derived Features (unchanged) ===
-    # def compute_ichimoku_features_from_5m(df: pd.DataFrame) -> pd.DataFrame:
-    #     timeframes = {'15min': 3, '1h': 12, '4h': 48, '1d': 288}
-    #     ichimoku = ta.trend.IchimokuIndicator(
-    #         high=df['High'], low=df['Low'], window1=9, window2=26, window3=52
-    #     )
-    #     df['Tenkan']   = ichimoku.ichimoku_conversion_line()
-    #     df['Kijun']    = ichimoku.ichimoku_base_line()
-    #     df['Senkou_A'] = ichimoku.ichimoku_a()
-    #     df['Senkou_B'] = ichimoku.ichimoku_b()
-    #     df['tenkan_kijun_delta'] = df['Tenkan'] - df['Kijun']
-
-    #     for label, window in timeframes.items():
-    #         df[f'{label}_tk_delta_slope']       = (df['tenkan_kijun_delta'] - df['tenkan_kijun_delta'].shift(window)) / window
-    #         df[f'{label}_tk_delta_mean']        = df['tenkan_kijun_delta'].rolling(window).mean()
-    #         df[f'{label}_tk_delta_std']         = df['tenkan_kijun_delta'].rolling(window).std()
-    #         df[f'{label}_tk_delta_pct_rank']    = df['tenkan_kijun_delta'].rank(pct=True).rolling(window).apply(lambda x: x[-1], raw=True)
-
-    #     return df
-    # df = compute_ichimoku_features_from_5m(df)
-
-    df['feat_c1_lt_pre_s9']   = (df['Close'].shift(1) < df['SMA_9'].shift(1)).astype(int)
-    df['feat_c0_gt_s9']       = (df['Close'] > df['SMA_9']).astype(int)
-    df['feat_o1_gt_c1']       = (df['Open'].shift(1) > df['Close'].shift(1)).astype(int)
-    df['feat_o0_lt_c0']       = (df['Open'] < df['Close']).astype(int)
-
-    df['feat_c1_lt_pre_s20']  = (df['Close'].shift(1) < df['SMA_20'].shift(1)).astype(int)
-    df['feat_c0_gt_s20']      = (df['Close'] > df['SMA_20']).astype(int)
-
-    # Optional: also include cross-related features
-    df['feat_cross_above_s9']  = ((df['Close'].shift(1) < df['SMA_9'].shift(1)) & (df['Close'] > df['SMA_9'])).astype(int)
-    df['feat_cross_above_s20'] = ((df['Close'].shift(1) < df['SMA_20'].shift(1)) & (df['Close'] > df['SMA_20'])).astype(int)
-
-    df['feat_cross_below_s9']  = ((df['Close'].shift(1) > df['SMA_9'].shift(1)) & (df['Close'] < df['SMA_9'])).astype(int)
-    df['feat_cross_below_s20'] = ((df['Close'].shift(1) > df['SMA_20'].shift(1)) & (df['Close'] < df['SMA_20'])).astype(int)
-
     df['gk']      = (df['gain_ratio'].shift(1) > df['gain_ratio']).astype(int)
     df['pn']      = (df['pain_ratio'].shift(1) > df['gain_ratio']).astype(int)
 
@@ -495,8 +499,8 @@ def calculate_features(df, direction=1, pair_code=None):
         df['lower_wick'] = df[['Close', 'Open']].min(axis=1) - df['Low']
         df['candle_range'] = df['High'] - df['Low']
 
-        df['bull_count'] = (df['Close'] > df['Open']).rolling(5).sum()
-        df['bear_count'] = (df['Close'] < df['Open']).rolling(5).sum()
+        df['bull_count'] = (df['Close'] > df['Open']).rolling(3).sum()
+        df['bear_count'] = (df['Close'] < df['Open']).rolling(3).sum()
         df['momentum_unbalance'] = df['bull_count'] - df['bear_count']
         df.drop(columns=['bull_count', 'bear_count'], inplace=True)
 
@@ -544,109 +548,173 @@ def calculate_features(df, direction=1, pair_code=None):
     df['returns'] = df['Close'].pct_change()
     df['rolling_std'] = df['returns'].rolling(5).std()
     df['god_oscillator'] = (
-        0.6 * df['rsi_slope'] * 10 +
-        0.4 * (df['obv_slope'] / (df['rolling_std'] + 1e-6))
+        0.5 * df['rsi_slope'] * 10 +
+        0.5 * (df['obv_slope'] / (df['rolling_std'] + 1e-6))
     )
 
-    def add_candlestick_features(df):
-        # === 1. Range-bound Detection ===
-        def is_range_bound(window=5, threshold=0.015):
-            max_high = df['High'].rolling(window).max()
-            min_low = df['Low'].rolling(window).min()
-            range_pct = (max_high - min_low) / df['Close']
+    def add_candlestick_features(df,
+                            range_thr=0.002,   # ~0.2% for FX 5m; try 0.003–0.006 for XAUUSD
+                            cluster_window=10,
+                            cluster_lookback=200,
+                            cluster_q=0.20):
+        EPS = 1e-9
+
+        # === 1) Range-bound Detection (percent-of-price) ===
+        def is_range_bound(window=5, threshold=range_thr):
+            max_high = df['High'].rolling(window, min_periods=window).max()
+            min_low  = df['Low'].rolling(window,  min_periods=window).min()
+            range_pct = (max_high - min_low) / (df['Close'].abs() + EPS)
             return (range_pct < threshold).astype(int)
 
-        df['range_5'] = is_range_bound(14)
-        df['range_10'] = is_range_bound(48)
+        df['range_5']  = is_range_bound(5)
+        df['range_10'] = is_range_bound(10)
 
-        # === 2. Engulfing Patterns ===
+        # === 2) Engulfing Patterns ===
         df['bullish_engulf'] = (
-        (df['Close'].shift(1) < df['Open'].shift(1)) &
-        (df['Close'] > df['Open']) &
-        (df['Close'] > df['Open'].shift(1)) &
-        (df['Open'] < df['Close'].shift(1))
+            (df['Close'].shift(1) < df['Open'].shift(1)) &
+            (df['Close'] > df['Open']) &
+            (df['Close'] > df['Open'].shift(1)) &
+            (df['Open']  < df['Close'].shift(1))
         ).astype(int)
 
         df['bearish_engulf'] = (
-        (df['Close'].shift(1) > df['Open'].shift(1)) &
-        (df['Close'] < df['Open']) &
-        (df['Open'] > df['Close'].shift(1)) &
-        (df['Close'] < df['Open'].shift(1))
+            (df['Close'].shift(1) > df['Open'].shift(1)) &
+            (df['Close'] < df['Open']) &
+            (df['Open']  > df['Close'].shift(1)) &
+            (df['Close'] < df['Open'].shift(1))
         ).astype(int)
 
-        # === 3. Pin Bar Detection ===
-        body = abs(df['Close'] - df['Open'])
-        range_ = df['High'] - df['Low']
-        upper_wick = df['High'] - df[['Close', 'Open']].max(axis=1)
-        lower_wick = df[['Close', 'Open']].min(axis=1) - df['Low']
-        df['pin_bar'] = ((body / range_ < 0.3) & ((upper_wick > 2 * body) | (lower_wick > 2 * body))).astype(int)
+        # === 3) Pin Bar Detection ===
+        body = (df['Close'] - df['Open']).abs()
+        rng  = (df['High'] - df['Low']).clip(lower=EPS)
+        upper_wick = df['High'] - df[['Close','Open']].max(axis=1)
+        lower_wick = df[['Close','Open']].min(axis=1) - df['Low']
+        df['pin_bar'] = ((body / rng < 0.3) & ((upper_wick > 2*body) | (lower_wick > 2*body))).astype(int)
 
-        # === 4. Inside/Outside Bars ===
-        df['inside_bar'] = ((df['High'] < df['High'].shift(1)) & (df['Low'] > df['Low'].shift(1))).astype(int)
+        # === 4) Inside / Outside Bars ===
+        df['inside_bar']  = ((df['High'] < df['High'].shift(1)) & (df['Low'] > df['Low'].shift(1))).astype(int)
         df['outside_bar'] = ((df['High'] > df['High'].shift(1)) & (df['Low'] < df['Low'].shift(1))).astype(int)
 
-        # === 5. Clustering / Candle Compression ===
-        def cluster_score(window=10, threshold=0.01):
-            max_high = df['High'].rolling(window).max()
-            min_low = df['Low'].rolling(window).min()
-            spread = (max_high - min_low) / df['Close']
-            return (spread < threshold).astype(int)
+        # === 5) Clustering / Candle Compression (percentile-based, adaptive) ===
+        def cluster_score_pctile(window=cluster_window, lookback=cluster_lookback, q=cluster_q):
+            win_max = df['High'].rolling(window, min_periods=window).max()
+            win_min = df['Low'].rolling(window,  min_periods=window).min()
+            rng = win_max - win_min
+            thr = rng.rolling(lookback, min_periods=lookback).quantile(q)
+            return (rng <= thr).astype(int)
 
-        df['cluster_10'] = cluster_score(14)
+        df['cluster_10'] = cluster_score_pctile()
 
-        # === Add memory with lag features (shifts) ===
-        features_to_shift = ['range_5', 'range_10', 'bullish_engulf', 'bearish_engulf',
-                    'pin_bar', 'inside_bar', 'outside_bar', 'cluster_10']
-
+        # === Lag features (short memory) ===
+        features_to_shift = ['range_5','range_10','bullish_engulf','bearish_engulf',
+                            'pin_bar','inside_bar','outside_bar','cluster_10']
         for f in features_to_shift:
-            for lag in range(1, 6):  # shift 1 to 5
+            for lag in range(1, 3):   # lags 1 and 2
                 df[f'{f}_lag{lag}'] = df[f].shift(lag).fillna(0).astype(int)
 
         return df
+
     df = add_candlestick_features(df)
 
-    def detect_bos(df, lookback=22):
-        bos_up = []
-        bos_down = []
+    def _atr14(df):
+        prev_close = df['Close'].shift(1)
+        tr = np.maximum(df['High'] - df['Low'],
+                        np.maximum((df['High'] - prev_close).abs(),
+                                (df['Low'] - prev_close).abs()))
+        return tr.rolling(14, min_periods=1).mean()
 
-        for i in range(len(df)):
-            if i < lookback:
-                bos_up.append(0)
-                bos_down.append(0)
-                continue
+    def detect_bos(df, lookback=60, swing_k=2, min_break_atr=0.25, confirm_with_close=True):
+        """
+        5m-friendly BOS:
+        - lookback: bars to look back for last swing (60 ~= 5h)
+        - swing_k: fractal strength (2 = 2 bars on each side)
+        - min_break_atr: close/high must exceed last swing by this many ATRs
+        - confirm_with_close: True = use Close to confirm, else use High/Low
+        Creates df['BoS_Up'], df['BoS_Down'] in-place.
+        """
+        atr = _atr14(df).ffill()
 
-            recent_highs = df['High'].iloc[i-lookback:i]
-            recent_lows = df['Low'].iloc[i-lookback:i]
-            bos_up.append(int(df['High'].iloc[i] > recent_highs.max()))
-            bos_down.append(int(df['Low'].iloc[i] < recent_lows.min()))
+        # Fractal swing points (vectorized, center-rolling)
+        win = 2 * swing_k + 1
+        sw_hi = (df['High'] == df['High'].rolling(win, center=True).max()).astype(int)
+        sw_lo = (df['Low']  == df['Low'].rolling(win, center=True).min()).astype(int)
 
-        df['BoS_Up'] = bos_up
-        df['BoS_Down'] = bos_down
+        # Last swing price memory (forward fill)
+        last_sw_hi_price = df['High'].where(sw_hi.eq(1)).ffill()
+        last_sw_lo_price = df['Low'].where(sw_lo.eq(1)).ffill()
 
-    df['SMA_9_lt_SMA_20'] = (df['SMA_9'] < df['SMA_20']).astype(int)
+        # Bars since last swing index
+        idx = np.arange(len(df))
+        last_sw_hi_idx = np.where(sw_hi.values==1, idx, np.nan)
+        last_sw_lo_idx = np.where(sw_lo.values==1, idx, np.nan)
+        last_sw_hi_idx = pd.Series(last_sw_hi_idx).ffill().values
+        last_sw_lo_idx = pd.Series(last_sw_lo_idx).ffill().values
+
+        bars_since_hi = idx - np.nan_to_num(last_sw_hi_idx, nan=-1)
+        bars_since_lo = idx - np.nan_to_num(last_sw_lo_idx, nan=-1)
+
+        # Confirmation price
+        up_price  = df['Close'] if confirm_with_close else df['High']
+        down_price= df['Close'] if confirm_with_close else df['Low']
+
+        # BOS conditions: break by >= min_break_atr * ATR and last swing is within lookback
+        bos_up = (
+            (bars_since_hi > 0) & (bars_since_hi <= lookback) &
+            (up_price >= (last_sw_hi_price + min_break_atr * atr))
+        ).astype(int)
+
+        bos_down = (
+            (bars_since_lo > 0) & (bars_since_lo <= lookback) &
+            (down_price <= (last_sw_lo_price - min_break_atr * atr))
+        ).astype(int)
+
+        df['BoS_Up'] = bos_up.fillna(0).astype(int)
+        df['BoS_Down'] = bos_down.fillna(0).astype(int)
+        return df
+
+
     from scipy.signal import find_peaks
 
-    def detect_double_top_bottom(df, distance=22, threshold=0.002):
+    def detect_double_top_bottom(df, distance=18, tol_atr_mult=0.25, min_sep_bars=12):
+        """
+        5m-friendly DT/DB:
+        - distance: min bars between detected peaks/troughs (18 ~= 90 min)
+        - tol_atr_mult: two peaks are 'equal' if |Δprice| <= tol_atr_mult * ATR at the 2nd peak
+        - min_sep_bars: additional guard for minimum spacing
+        Creates df['Double_Top'], df['Double_Bottom'] in-place.
+        """
+        atr = _atr14(df).ffill()
         highs = df['High'].values
-        lows = df['Low'].values
+        lows  = df['Low'].values
 
+        # Peaks and troughs
         peaks, _ = find_peaks(highs, distance=distance)
         troughs, _ = find_peaks(-lows, distance=distance)
 
-        dt_mask = np.zeros(len(df))
-        db_mask = np.zeros(len(df))
+        dt_mask = np.zeros(len(df), dtype=int)
+        db_mask = np.zeros(len(df), dtype=int)
 
+        # Double Top: adjacent peaks with similar heights (ATR tolerance)
         for i in range(1, len(peaks)):
-            if abs(highs[peaks[i]] - highs[peaks[i - 1]]) / highs[peaks[i]] < threshold:
-                dt_mask[peaks[i]] = 1
+            p1, p2 = peaks[i-1], peaks[i]
+            if (p2 - p1) < min_sep_bars: 
+                continue
+            tol = tol_atr_mult * atr.iloc[p2]
+            if np.abs(highs[p2] - highs[p1]) <= float(tol):
+                dt_mask[p2] = 1
 
+        # Double Bottom: adjacent troughs with similar depths (ATR tolerance)
         for i in range(1, len(troughs)):
-            if abs(lows[troughs[i]] - lows[troughs[i - 1]]) / lows[troughs[i]] < threshold:
-                db_mask[troughs[i]] = 1
+            t1, t2 = troughs[i-1], troughs[i]
+            if (t2 - t1) < min_sep_bars: 
+                continue
+            tol = tol_atr_mult * atr.iloc[t2]
+            if np.abs(lows[t2] - lows[t1]) <= float(tol):
+                db_mask[t2] = 1
 
-        df['Double_Top'] = dt_mask.astype(int)
-        df['Double_Bottom'] = db_mask.astype(int)
-
+        df['Double_Top'] = dt_mask
+        df['Double_Bottom'] = db_mask
+        return df
 
     def candles_since_bollinger_touch(df):
         last_touch_upper = np.full(len(df), np.nan)
@@ -666,11 +734,172 @@ def calculate_features(df, direction=1, pair_code=None):
 
         df['Candles_Since_BB_Upper'] = last_touch_upper
         df['Candles_Since_BB_Lower'] = last_touch_lower
+        return df
 
+    def label_choch_from_bos(df, lookback=100):
+        """
+        Marks the first opposite-direction break as CHoCH.
+        Requires df['BoS_Up'] and df['BoS_Down'] (0/1) already computed.
+        - lookback: only consider flips where the previous BOS happened within N bars.
+        Creates: CHoCH_Up, CHoCH_Down (0/1)
+        """
+        bos_dir = np.where(df['BoS_Up'].astype(int)==1, 1,
+                np.where(df['BoS_Down'].astype(int)==1, -1, 0))
+        idx = np.arange(len(df))
 
-    detect_bos(df, lookback=22)
-    detect_double_top_bottom(df)
-    candles_since_bollinger_touch(df)
+        last_dir = pd.Series(bos_dir).replace(0, np.nan).ffill().shift(1)
+        last_idx = pd.Series(np.where(bos_dir!=0, idx, np.nan)).ffill().shift(1)
+
+        within = (idx - last_idx) <= lookback
+
+        choch_up = (df['BoS_Up'].astype(int)==1) & (last_dir==-1) & within
+        choch_down = (df['BoS_Down'].astype(int)==1) & (last_dir== 1) & within
+
+        df['CHoCH_Up'] = choch_up.astype(int)
+        df['CHoCH_Down'] = choch_down.astype(int)
+        return df
+
+    def _atr(df, n=14):
+        pc = df['Close'].shift(1)
+        tr = np.maximum(df['High'] - df['Low'],
+                np.maximum((df['High'] - pc).abs(), (df['Low'] - pc).abs()))
+        return tr.rolling(n, min_periods=1).mean()
+
+    def label_hh_hl_lh_ll(df, k=2):
+        """
+        Fractal swing highs/lows and next-swing relationship:
+        HH/HL/LH/LL columns (0/1)
+        k=2 -> swing needs 2 bars on each side.
+        """
+        win = 2*k + 1
+        sh = (df['High'] == df['High'].rolling(win, center=True).max()).astype(int)
+        sl = (df['Low']  == df['Low'].rolling(win, center=True).min()).astype(int)
+
+        # record last swing highs/lows values & side
+        last_sh_val = df['High'].where(sh.eq(1)).ffill()
+        last_sl_val = df['Low'].where(sl.eq(1)).ffill()
+        last_swing  = np.where(sh.eq(1),  1, np.where(sl.eq(1), -1, np.nan))
+        last_swing  = pd.Series(last_swing).ffill()
+
+        # next swing relative to the previous swing of the same type
+        # build series of swing-only rows
+        swings = df.assign(sw_type=np.where(sh.eq(1),1,np.where(sl.eq(1),-1,0)),
+                        sw_price=np.where(sh.eq(1), df['High'],
+                                    np.where(sl.eq(1), df['Low'], np.nan)))
+        swings = swings[swings['sw_type']!=0].copy()
+
+        # compare consecutive swings
+        swings['prev_type']  = swings['sw_type'].shift(1)
+        swings['prev_price'] = swings['sw_price'].shift(1)
+
+        swings['HH'] = ((swings['sw_type']==1) & (swings['prev_type']==1) &
+                        (swings['sw_price'] > swings['prev_price'])).astype(int)
+        swings['HL'] = ((swings['sw_type']==-1) & (swings['prev_type']==-1) &
+                        (swings['sw_price'] > swings['prev_price'])).astype(int)
+        swings['LH'] = ((swings['sw_type']==1) & (swings['prev_type']==1) &
+                        (swings['sw_price'] < swings['prev_price'])).astype(int)
+        swings['LL'] = ((swings['sw_type']==-1) & (swings['prev_type']==-1) &
+                        (swings['sw_price'] < swings['prev_price'])).astype(int)
+
+        # map back to full df index
+        df['HH'] = 0; df['HL'] = 0; df['LH'] = 0; df['LL'] = 0
+        df.loc[swings.index, ['HH','HL','LH','LL']] = swings[['HH','HL','LH','LL']].values
+        return df
+
+    def detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True):
+        """
+        SFP_Up: takes out previous swing high by wick, closes back below (uptrap).
+        SFP_Down: takes out previous swing low, closes back above (downtrap).
+        """
+        atr = _atr(df).ffill()
+        win = 2*k + 1
+        swing_high = (df['High'] == df['High'].rolling(win, center=True).max())
+        swing_low  = (df['Low']  == df['Low'].rolling(win, center=True).min())
+
+        last_sh = df['High'].where(swing_high).ffill()
+        last_sl = df['Low'].where(swing_low).ffill()
+
+        tol_up = tol_atr_mult * atr
+        tol_dn = tol_atr_mult * atr
+
+        # price pokes above last swing high by >= tol, but fails
+        if confirm_with_close:
+            sfp_up = (df['High'] >= last_sh + tol_up) & (df['Close'] < last_sh)
+            sfp_dn = (df['Low']  <= last_sl - tol_dn) & (df['Close'] > last_sl)
+        else:
+            sfp_up = (df['High'] >= last_sh + tol_up) & (df['High']  < last_sh + 2*tol_up)
+            sfp_dn = (df['Low']  <= last_sl - tol_dn) & (df['Low']   > last_sl - 2*tol_dn)
+
+        df['SFP_Up'] = sfp_up.fillna(False).astype(int)
+        df['SFP_Down'] = sfp_dn.fillna(False).astype(int)
+        return df
+
+    def detect_fvg(df, min_atr_mult=0.1):
+        """
+        3-candle FVG:
+        Bull FVG when: Low[n] > High[n-2]  (gap) and body is impulsive
+        Bear FVG when: High[n] < Low[n-2]
+        min_atr_mult filters tiny gaps.
+        """
+        atr = _atr(df).ffill()
+        high_m2 = df['High'].shift(2)
+        low_m2  = df['Low'].shift(2)
+
+        bull_gap = (df['Low'] > high_m2)
+        bear_gap = (df['High'] < low_m2)
+
+        # width threshold
+        bull_w = (df['Low'] - high_m2)
+        bear_w = (low_m2 - df['High'])
+
+        bull_fvg = bull_gap & (bull_w >= min_atr_mult * atr)
+        bear_fvg = bear_gap & (bear_w >= min_atr_mult * atr)
+
+        df['FVG_Up'] = bull_fvg.fillna(False).astype(int)
+        df['FVG_Down'] = bear_fvg.fillna(False).astype(int)
+        return df
+
+    def detect_break_retest(df, lookahead=12, tol_atr_mult=0.25):
+        """
+        After a BOS, mark a retest of the breakout level within 'lookahead' bars.
+        Requires df['BoS_Up'] / df['BoS_Down'] (0/1).
+        """
+        atr = _atr(df).ffill()
+        ret_up = np.zeros(len(df), dtype=int)
+        ret_dn = np.zeros(len(df), dtype=int)
+
+        # breakout levels: last swing that was broken
+        last_high = df['High'].cummax()  # simple proxy; replace with stored swing if you have it
+        last_low  = (-df['Low']).cummax() * -1
+
+        for i in range(len(df)):
+            if df['BoS_Up'].iloc[i] == 1:
+                level = last_high.iloc[i]
+                tol = float(tol_atr_mult * atr.iloc[i])
+                hi = min(len(df), i + lookahead + 1)
+                # retest if price trades back to level +/- tol
+                if (df['Low'].iloc[i+1:hi] <= level + tol).any():
+                    ret_up[i] = 1
+
+            if df['BoS_Down'].iloc[i] == 1:
+                level = last_low.iloc[i]
+                tol = float(tol_atr_mult * atr.iloc[i])
+                hi = min(len(df), i + lookahead + 1)
+                if (df['High'].iloc[i+1:hi] >= level - tol).any():
+                    ret_dn[i] = 1
+
+        df['Retest_Up'] = ret_up
+        df['Retest_Down'] = ret_dn
+        return df
+
+    df = detect_bos(df, lookback=60, swing_k=2, min_break_atr=0.25, confirm_with_close=True)
+    df = detect_double_top_bottom(df, distance=18, tol_atr_mult=0.25, min_sep_bars=12)
+    df = candles_since_bollinger_touch(df)
+    df = label_choch_from_bos(df, lookback=100)
+    df = label_hh_hl_lh_ll(df, k=2)
+    df = detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True)
+    df = detect_fvg(df, min_atr_mult=0.1)
+    df = detect_break_retest(df, lookahead=12, tol_atr_mult=0.25)
 
    # ─── NEW: compute the 5 trade‐cols based on direction ───
     vol_window = 50
@@ -802,376 +1031,98 @@ def get_spread_limit(sym):
     return next((v for k, v in spread_limits.items() if k in sym), 0.00030)
    
 
-def handle_trigger_or_watch(symbol, trade_type, trigger_price, sl_price, tp_price,
-                            regress_pred, classifier_conf, meta_conf, funx, meta_class):
-    if is_symbol_locked(symbol) or has_open_trade(symbol, trade_type):
-        return
 
-    tick = mt5.symbol_info_tick(symbol)
-    if not tick:
-        return
+# ===== CONFIG =====
+TRADE_FILE = "trades.json"
+LOCK_FILE  = TRADE_FILE + ".lock"
 
-    bid, ask = tick.bid, tick.ask
-    spread = ask - bid
-    if spread > get_spread_limit(symbol):
-        send_telegram_message(f"❌ Spread too high for {symbol}.")
-        return
+# ===== FILE LOCK (Unix/WSL & Windows) =====
+try:
+    import fcntl
+    def _lock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    def _unlock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+except ImportError:
+    import msvcrt
+    def _lock_file(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+    def _unlock_file(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
-    price = ask if trade_type == "buy" else bid
-    if (trade_type == "buy" and price >= trigger_price) or (trade_type == "sell" and price <= trigger_price):
-        place_market_order(symbol, trade_type, price, sl_price, tp_price,
-                           regress_pred, classifier_conf, meta_conf, funx, meta_class)
-    else:
-        threading.Thread(
-            target=watch_price_and_execute,
-            args=(symbol, trade_type, trigger_price, sl_price, tp_price,
-                  regress_pred, classifier_conf, meta_conf, funx, meta_class),
-            daemon=True
-        ).start()
+@contextmanager
+def file_lock(lock_path=LOCK_FILE):
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    with open(lock_path, "a+") as lf:
+        _lock_file(lf)
+        try:
+            yield
+        finally:
+            _unlock_file(lf)
 
-
-def watch_price_and_execute(symbol, trade_type, trigger_price, sl_price, tp_price,
-                            regress_pred, classifier_conf, meta_conf, funx, meta_class):
-    timeout = 300  # 5 minutes
-    interval = 1
-    waited = 0
-
-    while waited < timeout:
-        tick = mt5.symbol_info_tick(symbol)
-        if not tick:
-            time.sleep(interval)
-            waited += interval
-            continue
-
-        bid, ask = tick.bid, tick.ask
-        spread = ask - bid
-        if spread > get_spread_limit(symbol):
-            time.sleep(interval)
-            waited += interval
-            continue
-
-        price = ask if trade_type == "buy" else bid
-        if (trade_type == "buy" and price >= trigger_price) or (trade_type == "sell" and price <= trigger_price):
-            place_market_order(symbol, trade_type, price, sl_price, tp_price,
-                               regress_pred, classifier_conf, meta_conf, funx, meta_class)
-            return
-
-        time.sleep(interval)
-        waited += interval
-
-    send_telegram_message(f"⌛ Trade expired for {symbol} — trigger not hit.")
-
-
-def place_market_order(symbol, trade_type, price, sl_price, tp_price,
-                       regress_pred, classifier_conf, meta_conf, funx, meta_class):
-    acct = mt5.account_info()
-    sl_dist = abs(price - sl_price)
-    lot = calculate_lot_size(acct.balance, sl_dist, symbol, risk_percent=2)
-    order_type = mt5.ORDER_TYPE_BUY if trade_type == "buy" else mt5.ORDER_TYPE_SELL
-
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": lot,
-        "type": order_type,
-        "price": price,
-        "sl": sl_price,
-        "tp": tp_price,
-        "deviation": 20,
-        "magic": 123456,
-        "comment": "InstantTriggerOrder",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC
-    }
-
-    res = mt5.order_send(request)
-    if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-        msg = f"✅ {trade_type.upper()} order placed for {symbol} @ {price:.5f}"
-        send_telegram_message(msg)
-        lock_symbol(symbol, duration=300)
-        close_opposite_trades(trade_type, symbol)
-
-        trade_data = {
-            "id": str(res.order),
-            "symbol": symbol,
-            "trade_type": trade_type,
-            "entry_price": price,
-            "sl": sl_price,
-            "tp": tp_price,
-            "entry_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "regress_pred": regress_pred,
-            "classifier_conf": classifier_conf,
-            "meta_classifier": meta_conf,
-            "meta_class": meta_class,
-            "funx": funx,
-            "balance_at_entry": acct.balance,
-            "equity_at_entry": acct.equity
-        }
-        update_trade(str(res.order), trade_data)
-    else:
-        send_telegram_message(f"❌ MARKET order failed for {symbol}: {res.comment if res else 'No response'}")
-
-
-#FUNCTION TO DOCUMENT TRADE 
-TRADE_FILE = "trades_gbp.json"
-
-# Load existing trade data from JSON
+# ===== SAFE LOAD / ATOMIC WRITE / UPSERT =====
 def load_trades():
+    """Safe loader. If file missing or corrupted, return {} (and try .bak)."""
+    if not os.path.exists(TRADE_FILE):
+        return {}
     try:
-        with open(TRADE_FILE, "r") as f:
+        with open(TRADE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}  # Return empty if file is missing or corrupted
+    except json.JSONDecodeError:
+        bak = TRADE_FILE + ".bak"
+        if os.path.exists(bak):
+            try:
+                with open(bak, "r", encoding="utf-8") as fb:
+                    return json.load(fb)
+            except Exception:
+                pass
+        # fall back to empty (and keep corrupted file for debugging)
+        return {}
 
-# Save trade data to JSON
+def _atomic_write_json(path, data):
+    """Write JSON atomically: tmp -> fsync -> replace; also keep .bak."""
+    tmp_path = path + ".tmp"
+    # backup current file under lock to .bak (best-effort)
+    if os.path.exists(path):
+        try:
+            shutil.copy2(path, path + ".bak")
+        except Exception:
+            pass
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)  # atomic on same filesystem
+
+def safe_upsert_trade(trade_id, trade_data):
+    """
+    Read-modify-write under a file lock, with atomic replace.
+    Prevents concurrent writers from truncating/overwriting each other.
+    """
+    with file_lock():
+        trades = load_trades()
+        trades[str(trade_id)] = trade_data
+        _atomic_write_json(TRADE_FILE, trades)
+
+# ===== LEGACY APIS (kept for compatibility) =====
 def save_trades(trades):
-    with open(TRADE_FILE, "w") as f:
+    """Legacy writer (not recommended for live). Left for compatibility."""
+    # with file_lock():  # (You could lock even here if you choose to keep it)
+    #     _atomic_write_json(TRADE_FILE, trades)
+    with open(TRADE_FILE, "w", encoding="utf-8") as f:
         json.dump(trades, f, indent=4)
 
-# Retrieve a specific trade by ID
+def update_trade(trade_id, trade_data):
+    """Use safe upsert instead of whole-file rewrite."""
+    safe_upsert_trade(trade_id, trade_data)
+
 def get_trade(trade_id):
     trades = load_trades()
     return trades.get(str(trade_id), None)
 
-# Add or update a trade in JSON storage
-def update_trade(trade_id, trade_data):
-    trades = load_trades()
-    trades[str(trade_id)] = trade_data
-    save_trades(trades)
-
-
-def refresh_trades_on_start():
-    positions = mt5.positions_get()
-    trades = load_trades()
-
-    for position in positions:
-        trade_id = str(position.ticket)
-        if trade_id not in trades:
-            broker_entry_time = datetime.datetime.fromtimestamp(position.time).replace(tzinfo=datetime.timezone.utc)
-            entry_time = broker_entry_time - datetime.timedelta(minutes=BROKER_TIME_OFFSET_MINUTES)
-            trade_data = {
-                "id": trade_id,
-                "symbol": position.symbol,
-                "trade_type": "buy" if position.type == mt5.ORDER_TYPE_BUY else "sell",
-                "entry_price": position.price_open,
-                "exit_price": None,
-                "sl": position.sl,
-                "tp": position.tp,
-                "profit": position.profit,
-                "trade_duration": 0.0,
-                "entry_time": entry_time.isoformat(),
-                "exit_time": None
-            }
-            trades[trade_id] = trade_data
-
-    save_trades(trades)
-
-
-def close_trade(trade_id, symbol, trade_type, current_price, profit):
-    trades = load_trades()
-
-    # Initialize MetaTrader5 if not already initialized
-    if not mt5.initialize():
-        print("❌ MetaTrader5 connection failed!")
-        logger.error("MetaTrader5 connection failed!")
-        return
-
-    # Check if the position exists
-    positions = mt5.positions_get(ticket=int(trade_id))
-    if not positions:
-        print(f"⚠️ Position {trade_id} not found or already closed.")
-        logger.warning(f"Position {trade_id} not found or already closed.")
-        return
-
-    position = positions[0]
-    volume = position.volume
-    print(f"Position found: {position}")
-    logger.debug(f"Position found: {position}")
-
-    # Prepare close order
-    close_type = mt5.ORDER_TYPE_SELL if trade_type.lower() == "buy" else mt5.ORDER_TYPE_BUY
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": volume,
-        "type": close_type,
-        "position": int(trade_id),
-        "price": current_price,  # This will be overridden by broker execution
-        "deviation": 20,
-        "magic": 123456,
-        "comment": "Trade closed by model",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC
-    }
-
-    print(f"Attempting to close trade {trade_id} at price {current_price} with volume {volume}")
-    logger.debug(f"Attempting to close trade {trade_id} at price {current_price} with volume {volume}")
-
-    result = mt5.order_send(request)
-
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        print(f"✅ Trade closed successfully. Retcode: {result.retcode}, Price: {result.price}")
-        logger.info(f"Trade {trade_id} closed at {result.price}, retcode: {result.retcode}")
-
-        account_info = mt5.account_info()
-
-        # Update trade record in JSON
-        if trade_id in trades:
-            trade_data = trades[trade_id]
-            trade_data["exit_price"] = result.price  # Use actual exit price from result
-            trade_data["exit_time"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            trade_data["profit"] = profit
-            trade_data["balance_at_exit"] = account_info.balance if account_info else None
-            trade_data["equity_at_exit"] = account_info.equity if account_info else None
-
-            save_trades(trades)
-            send_telegram_message(
-                f"✅ Closed {trade_type.upper()} {symbol} trade (ID: {trade_id}) at {result.price:.5f} with profit: {profit:.2f}"
-            )
-    else:
-        error_code, error_msg = mt5.last_error()
-        print(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
-        logger.error(f"❌ Failed to close trade {trade_id}. Error code: {error_code}, message: {error_msg}")
-        send_telegram_message(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
-
-def close_trade_partial(trade_id, symbol, trade_type, current_price, profit, fraction):
-    trades = load_trades()
-
-    if not mt5.initialize():
-        print("❌ MetaTrader5 connection failed!")
-        logger.error("MetaTrader5 connection failed!")
-        return
-
-    positions = mt5.positions_get(ticket=int(trade_id))
-    if not positions:
-        print(f"⚠️ Position {trade_id} not found or already closed.")
-        logger.warning(f"Position {trade_id} not found or already closed.")
-        return
-
-    position = positions[0]
-    volume = position.volume
-    close_volume = round(volume * fraction, 2)  # MT5 typically supports 2 decimal places
-
-    if close_volume <= 0:
-        print(f"❌ Invalid close volume: {close_volume}")
-        logger.error(f"Invalid close volume: {close_volume}")
-        return
-
-    close_type = mt5.ORDER_TYPE_SELL if trade_type.lower() == "buy" else mt5.ORDER_TYPE_BUY
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": close_volume,
-        "type": close_type,
-        "position": int(trade_id),
-        "price": current_price,
-        "deviation": 20,
-        "magic": 123456,
-        "comment": f"Partial close {int(fraction*100)}pct by model",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC
-    }
-
-    print(f"Attempting to close {fraction*100:.0f}% of trade {trade_id} at price {current_price} with volume {close_volume}")
-    logger.debug(f"Attempting to close {fraction*100:.0f}% of trade {trade_id} at price {current_price} with volume {close_volume}")
-
-    result = mt5.order_send(request)
-
-    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
-        print(f"✅ Partial close successful. Retcode: {result.retcode}, Price: {result.price}")
-        logger.info(f"Trade {trade_id} partially closed at {result.price}, volume: {close_volume}")
-
-        account_info = mt5.account_info()
-
-        # Update trade record in JSON
-        if trade_id in trades:
-            trade_data = trades[trade_id]
-            trade_data["exit_price"] = result.price  # Use actual exit price from result
-            trade_data["exit_time"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            trade_data["profit"] = profit
-            trade_data["balance_at_exit"] = account_info.balance if account_info else None
-            trade_data["equity_at_exit"] = account_info.equity if account_info else None
-
-            save_trades(trades)
-            send_telegram_message(
-                f"✅ Closed {trade_type.upper()} {symbol} trade (ID: {trade_id}) at {result.price:.5f} with profit: {profit:.2f}"
-            )
-
-        send_telegram_message(
-            f"✅ Closed {fraction*100:.0f}% of {trade_type.upper()} {symbol} trade (ID: {trade_id}) at {result.price:.5f} with profit: {profit:.2f}"
-        )
-    else:
-        error_code, error_msg = mt5.last_error()
-        print(f"❌ Failed to partially close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
-        logger.error(f"❌ Failed to partially close trade {trade_id}. Error code: {error_code}, message: {error_msg}")
-        send_telegram_message(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
-
-def close_opposite_trades(new_trade_type, symbol):
-    """
-    Close all existing positions of the opposite type before opening a new trade.
-    """
-    if not mt5.initialize():
-        print("❌ MetaTrader5 connection failed!")
-        return
-
-    open_positions = mt5.positions_get(symbol=symbol)
-    if not open_positions:
-        print("ℹ️ No open positions to check.")
-        return
-
-    opposite_type = mt5.ORDER_TYPE_SELL if new_trade_type.lower() == "buy" else mt5.ORDER_TYPE_BUY
-
-    for pos in open_positions:
-        if pos.type == opposite_type:
-            trade_type_str = "sell" if pos.type == mt5.ORDER_TYPE_SELL else "buy"
-            current_price = mt5.symbol_info_tick(symbol).bid if trade_type_str == "sell" else mt5.symbol_info_tick(symbol).ask
-            close_trade(
-                trade_id=pos.ticket,
-                symbol=symbol,
-                trade_type=trade_type_str,
-                current_price=current_price,
-                profit=pos.profit
-            )
-
-
-def repair_missing_trades():
-    print("🔧 Repairing missing trades from history...")
-    trades = load_trades()
-    now = datetime.datetime.now()
-    start = now - datetime.timedelta(days=3)
-
-    closed_deals = mt5.history_deals_get(start, now)
-    if closed_deals is None:
-        print("⚠️ No deal history found.")
-        return
-
-    for deal in closed_deals:
-        trade_id = str(deal.position_id)
-        if trade_id not in trades:
-            continue
-        
-        trade = trades[trade_id]
-        if trade.get("exit_price") is None or trade.get("profit") is None:
-            trade["exit_price"] = deal.price
-            trade["exit_time"] = datetime.datetime.fromtimestamp(deal.time).isoformat()
-            trade["profit"] = deal.profit
-            print(f"✅ Updated trade ID {trade_id} with profit: {deal.profit}")
-    
-    save_trades(trades)
-
-
-def send_limited_telegram_message(message):
-    global last_trade_summary_time
-
-    current_time = time.time()
-    if current_time - last_trade_summary_time >= TRADE_SUMMARY_INTERVAL:
-        send_telegram_message(message)
-        last_trade_summary_time = current_time
-    else:
-        print("⏱️ Message skipped to respect 5-minute interval.")
-
+# ===== YOUR manage_trades, modified to call safe_upsert_trade() =====
 def manage_trades(symbol, df_buy, df_sell):
-    """Enhanced trade management using the correct directional features with meta classifier TP adjustment."""
+    """Enhanced trade management using the correct directional features with meta classifier TP adjustment + timed breakeven."""
     trades = load_trades()
     symbol_info = mt5.symbol_info(symbol)
     if not symbol_info:
@@ -1182,15 +1133,38 @@ def manage_trades(symbol, df_buy, df_sell):
     digits = symbol_info.digits
     positions = mt5.positions_get(symbol=symbol)
 
+    def _round_price(p: float) -> float:
+        return round(p, digits)
+
+    def _improves_sl(is_buy: bool, new_sl: float, current_sl: float | None) -> bool:
+        """Return True if new_sl tightens risk (never loosens)."""
+        if current_sl is None or current_sl == 0:
+            return True
+        return (new_sl > current_sl) if is_buy else (new_sl < current_sl)
+
+    def _valid_sl_vs_market(is_buy: bool, new_sl: float, current_price: float) -> bool:
+        """Ensure SL is on the correct side of market to avoid immediate stop."""
+        if is_buy:
+            return new_sl < (current_price - point)
+        else:
+            return new_sl > (current_price + point)
+
     if positions:
         for position in positions:
             trade_id = str(position.ticket)
             is_buy = position.type == mt5.ORDER_TYPE_BUY
             df = df_buy if is_buy else df_sell
+
             latest_5m = df.iloc[-2]
             latest_5m_sma9 = latest_5m["SMA_9"]
             valid_hour = latest_5m["valid_hour"]
-            current_price = mt5.symbol_info_tick(symbol).ask if is_buy else mt5.symbol_info_tick(symbol).bid
+
+            tick = mt5.symbol_info_tick(symbol)
+            if not tick:
+                print(f"[ERROR] No tick for {symbol}")
+                continue
+            current_price = tick.ask if is_buy else tick.bid
+
             profit = position.profit
             entry_price = position.price_open
             current_sl = position.sl
@@ -1228,31 +1202,41 @@ def manage_trades(symbol, df_buy, df_sell):
                     "current_price": current_price,
                     "trade_duration": 0,
                     "milestone_comment": None,
-                    "Target Hit": False
+                    "Target Hit": False,
+                    # New fields
+                    "rr_unit": None,            # lock initial RR distance
+                    "be_stage": 0               # 0:none, 1: -0.5RR applied, 2: +0.2RR applied
                 }
+                # persist new trade immediately (append-safe)
+                safe_upsert_trade(trade_id, trade_data)
+
+            # Lock RR to the initial stop distance so later SL edits don't break RR math
+            if not trade_data.get("rr_unit"):
+                initial_rr_unit = abs(entry_price - (current_sl or entry_price))
+                if initial_rr_unit == 0:
+                    print(f"[ERROR] Initial RR Unit is zero for trade {trade_id}. Skipping.")
+                    continue
+                trade_data["rr_unit"] = initial_rr_unit
+
+            base_rr_unit = trade_data["rr_unit"]  # always use this for RR/TP math
 
             current_time = datetime.datetime.now(datetime.timezone.utc)
             trade_duration = (current_time - entry_time).total_seconds() / 60
-            rr_unit = abs(entry_price - current_sl)
 
-            if rr_unit == 0:
-                print(f"[ERROR] RR Unit is zero for trade {trade_id}. Skipping RR calculation.")
-                continue
-
-            # === Meta Classifier-based TP Adjustment ===
+            # === Meta Classifier-based TP Adjustment (uses base_rr_unit) ===
             meta_class = trade_data.get("meta_class")
             if meta_class is not None:
                 rr_targets = {
                     0: 0.0,
-                    1: 1.10,
-                    2: 1.10,
+                    1: 1.05,
+                    2: 1.05,
                 }
                 target_rr = rr_targets.get(meta_class, 1.0)
-                expected_tp = entry_price + (target_rr * rr_unit) if is_buy else entry_price - (target_rr * rr_unit)
-                rounded_expected_tp = round(expected_tp, digits)
+                expected_tp = entry_price + (target_rr * base_rr_unit) if is_buy else entry_price - (target_rr * base_rr_unit)
+                rounded_expected_tp = _round_price(expected_tp)
                 tp_deviation = abs((current_tp or 0) - rounded_expected_tp)
 
-                if tp_deviation > 0.1 * rr_unit:
+                if tp_deviation > 0.1 * base_rr_unit:
                     print(f"[⚙️ FIX] Adjusting TP for {symbol} trade {trade_id} to {target_rr}RR based on meta_class {meta_class}")
                     request = {
                         "action": mt5.TRADE_ACTION_SLTP,
@@ -1275,9 +1259,9 @@ def manage_trades(symbol, df_buy, df_sell):
                     else:
                         print(f"[WARNING] Failed to adjust TP for {trade_id}: {result.comment}")
 
-            # === Calculate RR and update stats ===
+            # === Calculate RR and update stats (uses base_rr_unit) ===
             price_diff = (current_price - entry_price) if is_buy else (entry_price - current_price)
-            current_rr = price_diff / rr_unit
+            current_rr = price_diff / base_rr_unit
             max_rr = max(current_rr, trade_data.get("max_rr", 0))
 
             trade_data.update({
@@ -1291,26 +1275,73 @@ def manage_trades(symbol, df_buy, df_sell):
             })
 
             # Milestone
-            # if max_rr >= 1.5 and not trade_data.get("Target Hit"):
-            #     trade_data["hit_1_to_2"] = True
-            #     trade_data["milestone_comment"] = "🎯 Hit 1.5RR"
-            #     trade_data["Target Hit"] = True
-            #     send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit 1.5RR Target! Current RR: {current_rr:.2f}")
+            if max_rr >= 1.04 and not trade_data.get("Target Hit"):
+                trade_data["hit_1:0"] = True
+                trade_data["milestone_comment"] = "🎯 Hit 1.0RR"
+                trade_data["Target Hit"] = True
+                send_telegram_message(f"🎯 Trade {symbol} (ID: {trade_id}) Hit 1.0RR Target! Current RR: {current_rr:.2f}")
+
+            # === Timed Breakeven (won't break RR math; uses base_rr_unit) ===
+            be_stage = int(trade_data.get("be_stage", 0))
+
+            def _try_move_sl(target_rr_for_sl: float, stage_to_set: int, label: str):
+                nonlocal current_sl  # track if we changed it
+                new_sl = entry_price + (target_rr_for_sl * base_rr_unit) if is_buy else entry_price - (target_rr_for_sl * base_rr_unit)
+                new_sl = _round_price(new_sl)
+
+                # Only tighten SL, and keep it on the correct side of market
+                if not _improves_sl(is_buy, new_sl, current_sl):
+                    return False
+                if not _valid_sl_vs_market(is_buy, new_sl, current_price):
+                    return False
+
+                req = {
+                    "action": mt5.TRADE_ACTION_SLTP,
+                    "symbol": symbol,
+                    "position": int(trade_id),
+                    "sl": new_sl,
+                    "tp": current_tp,  # don't touch TP here
+                    "type": mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL,
+                    "magic": 123456,
+                    "comment": label,
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+                res = mt5.order_send(req)
+                if res.retcode == mt5.TRADE_RETCODE_DONE:
+                    trade_data["sl"] = new_sl
+                    trade_data["be_stage"] = stage_to_set
+                    # Update local for subsequent decisions
+                    current_sl = new_sl
+                    send_telegram_message(f"🛡️ {label}: {symbol} trade {trade_id} SL → {new_sl:.5f}")
+                    return True
+                else:
+                    print(f"[WARNING] Failed SL move ({label}) for {trade_id}: {res.comment}")
+                    return False
+
+            # Stage 1: after 15 minutes → SL to -0.5 RR (reduce risk)
+            # if trade_duration >= 60 and be_stage < 1:
+            #     _try_move_sl(target_rr_for_sl=-0.5, stage_to_set=1, label="Breakeven Stage 1 (-0.5RR)")
+
+            # # Stage 2: after 30 minutes → SL to +0.2 RR (lock small profit)
+            # if trade_duration >= 120 and be_stage < 2:
+            #     _try_move_sl(target_rr_for_sl=+0.2, stage_to_set=2, label="Breakeven Stage 2 (+0.2RR)")
 
             # === Exit Rules ===
             exit_triggered = False
 
-            # Rule 1: SMA9 crossover against position
-            if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
-                if current_rr >= 0.5 and trade_duration >= 60 :
-                    close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                    trade_data["close_reason"] = "SMA9 crossover against position"
-                    exit_triggered = True
-            
-            if max_rr >= 0.9 and current_rr <= 0.1 :
-                    close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-                    trade_data["close_reason"] = "Negative Drop"
-                    exit_triggered = True
+            # # Rule 1: SMA9 crossover against position
+            # if (is_buy and latest_5m["Close"] < latest_5m_sma9) or (not is_buy and latest_5m["Close"] > latest_5m_sma9):
+            #     if current_rr >= 0.5 and trade_duration >= 60:
+            #         close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+            #         trade_data["close_reason"] = "SMA9 crossover against position"
+            #         exit_triggered = True
+
+            # Rule: Negative Drop (after good run)
+            if not exit_triggered and max_rr >= 0.9 and current_rr <= 0.5:
+                close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
+                trade_data["close_reason"] = "Negative Drop"
+                exit_triggered = True
 
             # Rule 2: Time decay (4 hours)
             if not exit_triggered and trade_duration >= 240:
@@ -1318,50 +1349,41 @@ def manage_trades(symbol, df_buy, df_sell):
                 trade_data["close_reason"] = "Time decay exit (4h)"
                 exit_triggered = True
                 send_telegram_message(f"📉 Time decay exit for {symbol} after 4 hours")
-           
-            if not valid_hour: 
+
+            # # Rule 3: End-of-day guard
+            if not exit_triggered and not valid_hour:
                 close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
                 trade_data["close_reason"] = "📉 Closed all trade for the day"
                 exit_triggered = True
                 send_telegram_message(f"📉 Closed all trade for the day")
 
-
-            # Rule 3: Profit drop from peak
-            # if not exit_triggered and max_rr >= 1.5 and current_rr <= 0.3:
-            #     close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-            #     trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
-            #     exit_triggered = True
-            #     send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
-            
-            # if not exit_triggered and max_rr >= 2.5 and current_rr <= 1.5:
-            #     close_trade(trade_id, symbol, "buy" if is_buy else "sell", current_price, profit)
-            #     trade_data["close_reason"] = f"Profit drop from {max_rr:.2f}RR to {current_rr:.2f}RR"
-            #     exit_triggered = True
-            #     send_telegram_message(f"📉 Profit drop exit for {symbol} from {max_rr:.2f}RR to {current_rr:.2f}RR")
-
-
+            # persist each step safely instead of rewriting the whole file
             if exit_triggered:
                 trade_data.update({
                     "exit_price": current_price,
                     "exit_time": current_time.isoformat(),
                     "profit": profit
                 })
-                trades[trade_id] = trade_data
-                save_trades(trades)
+                # trades[trade_id] = trade_data
+                # save_trades(trades)
+                safe_upsert_trade(trade_id, trade_data)
                 continue
 
-            trades[trade_id] = trade_data
-  # === Sync broker history for closed deals ===
+            # trades[trade_id] = trade_data
+            # save_trades(trades)
+            safe_upsert_trade(trade_id, trade_data)
+
+    # === Sync broker history for closed deals ===
     closed_deals = mt5.history_deals_get(
-        datetime.datetime.now() - datetime.timedelta(days=1), 
+        datetime.datetime.now() - datetime.timedelta(days=1),
         datetime.datetime.now()
     )
-    
+
     if closed_deals:
         for deal in closed_deals:
             if deal.entry != 1:  # 1 means entry deal, we want exit deals
                 continue
-                
+
             position_id = str(deal.position_id)
             if position_id in trades:
                 trade_data = trades[position_id]
@@ -1372,17 +1394,527 @@ def manage_trades(symbol, df_buy, df_sell):
                         "profit": deal.profit,
                         "close_reason": trade_data.get("close_reason") or "Closed by broker"
                     })
-                    trades[position_id] = trade_data
-                    print(f"Updated closed trade {position_id} with exit data")
+                    # trades[position_id] = trade_data
+                    # print(f"Updated closed trade {position_id} with exit data")
+                    safe_upsert_trade(position_id, trade_data)
 
-    save_trades(trades)
+    # save_trades(trades)  # ❌ do not bulk-rewrite; each update is persisted atomically
+
+    # === Sync broker history for closed deals (net profit from MT5) ===
+    def _account_money_digits():
+        ai = mt5.account_info()
+        return getattr(ai, "currency_digits", 2) if ai else 2
+
+    def _round_money(x: float) -> float:
+        return round(float(x), _account_money_digits())
+
+    # Some brokers produce multiple "exit-like" entries on a position.
+    # Deal.entry values: 0=IN, 1=OUT, 2=INOUT (close by reversal), 3=OUT_BY (closed by)
+    EXIT_ENTRIES = {1, 2, 3}
+
+    # Look back far enough to catch anything still in your trades book.
+    hist_from = datetime.datetime.now() - datetime.timedelta(days=7)
+    hist_to   = datetime.datetime.now()
+
+    deals = mt5.history_deals_get(hist_from, hist_to)
+    if deals is None:
+        print("[WARNING] history_deals_get returned None")
+    else:
+        # Group deals by position_id for quick lookup
+        by_pos = {}
+        for d in deals:
+            by_pos.setdefault(d.position_id, []).append(d)
+
+        # Update any open-in-JSON (no exit_time yet) that were closed by broker
+        for position_id, trade_data in list(trades.items()):
+            if trade_data.get("exit_time"):
+                continue  # already finalized
+
+            pid = int(position_id)
+            pos_deals = by_pos.get(pid, [])
+            if not pos_deals:
+                continue
+
+            # Filter to exit-side deals only
+            exits = [d for d in pos_deals if int(getattr(d, "entry", -1)) in EXIT_ENTRIES]
+            if not exits:
+                continue
+
+            # Sum realized P/L to match MT5 "net": profit + commission + swap (+ fee if present)
+            net_profit = 0.0
+            for d in exits:
+                profit = float(getattr(d, "profit", 0.0))
+                commission = float(getattr(d, "commission", 0.0))
+                swap = float(getattr(d, "swap", 0.0))
+                # Some brokers have 'fee' too; guard with getattr
+                fee = float(getattr(d, "fee", 0.0))
+                net_profit += (profit + commission + swap + fee)
+
+            # Use the last exit deal as the canonical exit
+            last_exit = max(
+                exits,
+                key=lambda x: getattr(x, "time_msc", 0) or getattr(x, "time", 0)
+            )
+
+            exit_price = float(getattr(last_exit, "price", trade_data.get("exit_price") or 0.0))
+            exit_ts = getattr(last_exit, "time", None)
+            if exit_ts is None:
+                # fall back to now if time is missing (rare)
+                exit_dt = datetime.datetime.now(datetime.timezone.utc)
+            else:
+                exit_dt = datetime.datetime.fromtimestamp(exit_ts, tz=datetime.timezone.utc)
+
+            # Overwrite with broker values for 1:1 parity with MT5
+            trade_data.update({
+                "exit_price": exit_price,
+                "exit_time": exit_dt.isoformat(),
+                "profit": _round_money(net_profit),
+                "close_reason": trade_data.get("close_reason") or "Closed by broker",
+                "profit_source": "broker"  # new flag so you know it's synced
+            })
+
+            safe_upsert_trade(position_id, trade_data)
+
+def _round_volume_to_step(symbol: str, volume: float) -> float:
+    """
+    Round volume to the symbol's allowed step (safer than fixed 2 decimals).
+    Falls back to 2dp if step not available.
+    """
+    info = mt5.symbol_info(symbol)
+    if not info or not info.volume_step:
+        return round(volume, 2)
+    step = info.volume_step
+    v = max(info.volume_min or step, min(volume, info.volume_max or volume))
+    steps = round(v / step)
+    return round(steps * step, 2)
+
+
+def close_trade(trade_id, symbol, trade_type, current_price, profit):
+    trades = load_trades()
+
+    # Initialize MetaTrader5 if not already initialized
+    if not mt5.initialize():
+        print("❌ MetaTrader5 connection failed!")
+        logger.error("MetaTrader5 connection failed!")
+        return
+
+    # Check if the position exists
+    positions = mt5.positions_get(ticket=int(trade_id))
+    if not positions:
+        print(f"⚠️ Position {trade_id} not found or already closed.")
+        logger.warning(f"Position {trade_id} not found or already closed.")
+        return
+
+    position = positions[0]
+    volume = position.volume
+    print(f"Position found: {position}")
+    logger.debug(f"Position found: {position}")
+
+    # Compute correct side & refresh price if needed
+    is_buy = trade_type.lower() == "buy"
+    close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+    tick = mt5.symbol_info_tick(symbol)
+    if tick:
+        market_price = tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask
+        current_price = market_price  # broker will still execute at market
+    # else: keep passed current_price
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": close_type,
+        "position": int(trade_id),
+        "price": current_price,
+        "deviation": 20,
+        "magic": 123456,
+        "comment": "Trade closed by model",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC
+    }
+
+    print(f"Attempting to close trade {trade_id} at price {current_price} with volume {volume}")
+    logger.debug(f"Attempting to close trade {trade_id} at price {current_price} with volume {volume}")
+
+    result = mt5.order_send(request)
+
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        print(f"✅ Trade closed successfully. Retcode: {result.retcode}, Price: {result.price}")
+        logger.info(f"Trade {trade_id} closed at {result.price}, retcode: {result.retcode}")
+
+        account_info = mt5.account_info()
+
+        # Update trade record in JSON
+        if trade_id in trades:
+            trade_data = trades[trade_id]
+            trade_data["exit_price"] = result.price  # Use actual exit price from result
+            trade_data["exit_time"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            trade_data["profit"] = profit
+            trade_data["balance_at_exit"] = account_info.balance if account_info else None
+            trade_data["equity_at_exit"] = account_info.equity if account_info else None
+
+            # save_trades(trades)
+            safe_upsert_trade(trade_id, trade_data)
+
+            send_telegram_message(
+                f"✅ Closed {trade_type.upper()} {symbol} trade (ID: {trade_id}) at {result.price:.5f} with profit: {profit:.2f}"
+            )
+    else:
+        error_code, error_msg = mt5.last_error()
+        print(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
+        logger.error(f"❌ Failed to close trade {trade_id}. Error code: {error_code}, message: {error_msg}")
+        send_telegram_message(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
+
+def _round_price(symbol: str, p: float) -> float:
+    info = mt5.symbol_info(symbol)
+    if not info:
+        return p
+    return round(p, info.digits)
+
+def _round_volume_to_step(symbol: str, volume: float) -> float:
+    info = mt5.symbol_info(symbol)
+    if not info or not info.volume_step:
+        return round(volume, 2)
+    step = info.volume_step
+    v = max(info.volume_min or step, min(volume, info.volume_max or volume))
+    steps = round(v / step)
+    # keep two decimals typical for FX; adjust if your broker differs
+    return round(steps * step, 2)
+
+def _current_price_for_side(symbol: str, trade_type: str) -> float | None:
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        return None
+    return tick.ask if trade_type.lower() == "buy" else tick.bid
+
+def _within_spread_limit(symbol: str) -> bool:
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        return False
+    return (tick.ask - tick.bid) <= get_spread_limit(symbol)
+
+def _find_position_ticket_after_order(symbol: str, order_ticket: int, trade_type: str, magic=123456, tries=15, sleep_s=0.2):
+    """
+    Try to map the just-sent market order to a live position ticket.
+    Works for both hedging & netting accounts.
+    """
+    # direct lookup by ticket (some brokers map order->position in hedging)
+    for _ in range(tries):
+        pos = mt5.positions_get(ticket=order_ticket)
+        if pos:
+            return pos[0].ticket
+        time.sleep(sleep_s)
+
+    # fallback: find by symbol + magic + type near now
+    t_end = time.time() + tries * sleep_s
+    side = mt5.ORDER_TYPE_BUY if trade_type.lower() == "buy" else mt5.ORDER_TYPE_SELL
+    while time.time() < t_end:
+        positions = mt5.positions_get(symbol=symbol)
+        if positions:
+            # pick the latest that matches magic & side
+            candidates = [p for p in positions if getattr(p, "magic", 0) == magic and p.type == side]
+            if candidates:
+                # most recent by time_msc
+                candidates.sort(key=lambda p: getattr(p, "time_msc", 0), reverse=True)
+                return candidates[0].ticket
+        time.sleep(sleep_s)
+    return None
+
+
+# ================== YOUR FLOW (upgraded) ==================
+
+def handle_trigger_or_watch(symbol, trade_type, trigger_price, sl_price, tp_price,
+                            regress_pred, classifier_conf, meta_conf, funx, meta_class):
+    if is_symbol_locked(symbol) or has_open_trade(symbol, trade_type):
+        return
+
+    tick = mt5.symbol_info_tick(symbol)
+    if not tick:
+        return
+
+    bid, ask = tick.bid, tick.ask
+    spread = ask - bid
+    if spread > get_spread_limit(symbol):
+        send_telegram_message(f"❌ Spread too high for {symbol}.")
+        return
+
+    price = ask if trade_type == "buy" else bid
+    # round SL/TP to symbol digits up front
+    sl_price = _round_price(symbol, sl_price)
+    tp_price = _round_price(symbol, tp_price)
+
+    if (trade_type == "buy" and price >= trigger_price) or (trade_type == "sell" and price <= trigger_price):
+        # re-check lock & spread *right before* sending
+        if is_symbol_locked(symbol) or not _within_spread_limit(symbol):
+            return
+        place_market_order(symbol, trade_type, price, sl_price, tp_price,
+                           regress_pred, classifier_conf, meta_conf, funx, meta_class)
+    else:
+        threading.Thread(
+            target=watch_price_and_execute,
+            args=(symbol, trade_type, trigger_price, sl_price, tp_price,
+                  regress_pred, classifier_conf, meta_conf, funx, meta_class),
+            daemon=True
+        ).start()
+
+
+def watch_price_and_execute(symbol, trade_type, trigger_price, sl_price, tp_price,
+                            regress_pred, classifier_conf, meta_conf, funx, meta_class):
+    timeout = 300  # 5 minutes
+    interval = 1
+    waited = 0
+
+    while waited < timeout:
+        # bail if something else already took the symbol
+        if is_symbol_locked(symbol) or has_open_trade(symbol, trade_type):
+            return
+
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick:
+            time.sleep(interval)
+            waited += interval
+            continue
+
+        bid, ask = tick.bid, tick.ask
+        spread = ask - bid
+        if spread > get_spread_limit(symbol):
+            time.sleep(interval)
+            waited += interval
+            continue
+
+        price = ask if trade_type == "buy" else bid
+        if (trade_type == "buy" and price >= trigger_price) or (trade_type == "sell" and price <= trigger_price):
+            # re-check lock & spread right before sending
+            if is_symbol_locked(symbol) or not _within_spread_limit(symbol):
+                return
+            place_market_order(symbol, trade_type, price, sl_price, tp_price,
+                               regress_pred, classifier_conf, meta_conf, funx, meta_class)
+            return
+
+        time.sleep(interval)
+        waited += interval
+
+    send_telegram_message(f"⌛ Trade expired for {symbol} — trigger not hit.")
+
+
+def place_market_order(symbol, trade_type, price, sl_price, tp_price,
+                       regress_pred, classifier_conf, meta_conf, funx, meta_class):
+    # refresh price just in case
+    live_price = _current_price_for_side(symbol, trade_type)
+    if live_price is not None:
+        price = live_price
+
+    acct = mt5.account_info()
+    if acct is None:
+        send_telegram_message("❌ Could not read account info.")
+        return
+
+    sl_dist = abs(price - sl_price)
+    if sl_dist <= 0:
+        send_telegram_message("❌ Invalid SL distance.")
+        return
+
+    # lot sizing + volume step
+    lot_raw = calculate_lot_size(acct.balance, sl_dist, symbol, risk_percent=2)
+    lot = _round_volume_to_step(symbol, lot_raw)
+    if lot <= 0:
+        send_telegram_message("❌ Computed lot size is zero.")
+        return
+
+    # sanity on stop sides
+    is_buy = trade_type.lower() == "buy"
+    if is_buy and not (sl_price < price and tp_price > price):
+        send_telegram_message("❌ SL/TP not on correct sides for BUY.")
+        return
+    if (not is_buy) and not (sl_price > price and tp_price < price):
+        send_telegram_message("❌ SL/TP not on correct sides for SELL.")
+        return
+
+    order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": lot,
+        "type": order_type,
+        "price": price,
+        "sl": sl_price,
+        "tp": tp_price,
+        "deviation": 20,  # points
+        "magic": 123456,
+        "comment": "InstantTriggerOrder",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC
+    }
+
+    res = mt5.order_send(request)
+    if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+        msg = f"✅ {trade_type.upper()} order placed for {symbol} @ {price:.5f} (lot {lot})"
+        send_telegram_message(msg)
+
+        # lock quickly to prevent duplicates
+        lock_symbol(symbol, duration=300)
+
+        # optional: in netting mode this can change the just-opened position; keep if you intend that
+        close_opposite_trades(trade_type, symbol)
+
+        # try to map to a real position ticket
+        pos_ticket = _find_position_ticket_after_order(symbol, res.order, trade_type, magic=123456)
+        record_id = str(pos_ticket if pos_ticket is not None else res.order)
+
+        trade_data = {
+            "id": record_id,
+            "order_ticket": int(res.order),
+            "deal_ticket": int(getattr(res, "deal", 0) or 0),
+            "position_ticket": int(pos_ticket) if pos_ticket is not None else None,
+            "symbol": symbol,
+            "trade_type": trade_type,
+            "entry_price": price,
+            "sl": sl_price,
+            "tp": tp_price,
+            "entry_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "regress_pred": regress_pred,
+            "classifier_conf": classifier_conf,
+            "meta_classifier": meta_conf,
+            "meta_class": meta_class,
+            "funx": funx,
+            "balance_at_entry": acct.balance,
+            "equity_at_entry": acct.equity,
+            "volume": float(lot)
+        }
+
+        # update_trade(str(res.order), trade_data)
+        safe_upsert_trade(record_id, trade_data)
+
+    else:
+        err = mt5.last_error()
+        msg = f"❌ MARKET order failed for {symbol}: {res.comment if res else err}"
+        send_telegram_message(msg)
+
+def close_trade_partial(trade_id, symbol, trade_type, current_price, profit, fraction):
+    trades = load_trades()
+
+    if not mt5.initialize():
+        print("❌ MetaTrader5 connection failed!")
+        logger.error("MetaTrader5 connection failed!")
+        return
+
+    positions = mt5.positions_get(ticket=int(trade_id))
+    if not positions:
+        print(f"⚠️ Position {trade_id} not found or already closed.")
+        logger.warning(f"Position {trade_id} not found or already closed.")
+        return
+
+    position = positions[0]
+    volume = position.volume
+    raw_close_volume = volume * float(fraction)
+    close_volume = _round_volume_to_step(symbol, raw_close_volume)
+
+    if close_volume <= 0:
+        print(f"❌ Invalid close volume: {close_volume}")
+        logger.error(f"Invalid close volume: {close_volume}")
+        return
+
+    is_buy = trade_type.lower() == "buy"
+    close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick:
+        market_price = tick.bid if close_type == mt5.ORDER_TYPE_SELL else tick.ask
+        current_price = market_price
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": close_volume,
+        "type": close_type,
+        "position": int(trade_id),
+        "price": current_price,
+        "deviation": 20,
+        "magic": 123456,
+        "comment": f"Partial close {int(fraction*100)}pct by model",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC
+    }
+
+    print(f"Attempting to close {fraction*100:.0f}% of trade {trade_id} at price {current_price} with volume {close_volume}")
+    logger.debug(f"Attempting to close {fraction*100:.0f}% of trade {trade_id} at price {current_price} with volume {close_volume}")
+
+    result = mt5.order_send(request)
+
+    if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+        print(f"✅ Partial close successful. Retcode: {result.retcode}, Price: {result.price}")
+        logger.info(f"Trade {trade_id} partially closed at {result.price}, volume: {close_volume}")
+
+        account_info = mt5.account_info()
+
+        # Update trade record in JSON
+        if trade_id in trades:
+            trade_data = trades[trade_id]
+            # NOTE: For partial closes, we generally *don't* set final exit fields.
+            # Keep last partial info and accumulate fraction.
+            trade_data["last_partial_price"] = result.price
+            trade_data["last_partial_time"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            trade_data["last_partial_fraction"] = float(fraction)
+            trade_data["closed_fraction"] = float(trade_data.get("closed_fraction", 0.0) + fraction)
+            trade_data["profit"] = profit  # running profit
+            trade_data["balance_at_exit"] = account_info.balance if account_info else None
+            trade_data["equity_at_exit"] = account_info.equity if account_info else None
+
+            # If fully closed due to partial consuming whole volume, set exit fields
+            if abs(trade_data["closed_fraction"] - 1.0) < 1e-6:
+                trade_data["exit_price"] = result.price
+                trade_data["exit_time"] = trade_data["last_partial_time"]
+                trade_data["close_reason"] = trade_data.get("close_reason") or "Fully closed via partials"
+
+            # save_trades(trades)
+            safe_upsert_trade(trade_id, trade_data)
+
+            send_telegram_message(
+                f"✅ Closed {fraction*100:.0f}% of {trade_type.upper()} {symbol} trade (ID: {trade_id}) at {result.price:.5f} with profit: {profit:.2f}"
+            )
+    else:
+        error_code, error_msg = mt5.last_error()
+        print(f"❌ Failed to partially close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
+        logger.error(f"❌ Failed to partially close trade {trade_id}. Error code: {error_code}, message: {error_msg}")
+        send_telegram_message(f"❌ Failed to close trade {trade_id}. Error: {error_code}, Message: {error_msg}")
+
+
+def close_opposite_trades(new_trade_type, symbol):
+    """
+    Close all existing positions of the opposite type before opening a new trade.
+    """
+    if not mt5.initialize():
+        print("❌ MetaTrader5 connection failed!")
+        return
+
+    open_positions = mt5.positions_get(symbol=symbol)
+    if not open_positions:
+        print("ℹ️ No open positions to check.")
+        return
+
+    opposite_type = mt5.ORDER_TYPE_SELL if new_trade_type.lower() == "buy" else mt5.ORDER_TYPE_BUY
+
+    for pos in open_positions:
+        if pos.type == opposite_type:
+            trade_type_str = "sell" if pos.type == mt5.ORDER_TYPE_SELL else "buy"
+            tick = mt5.symbol_info_tick(symbol)
+            if not tick:
+                print(f"[ERROR] No tick for {symbol} when closing opposite trades")
+                continue
+            current_price = tick.bid if trade_type_str == "sell" else tick.ask
+            close_trade(
+                trade_id=pos.ticket,
+                symbol=symbol,
+                trade_type=trade_type_str,
+                current_price=current_price,
+                profit=pos.profit
+            )
 
 
 
 def extract_features(df):
     latest_data_df = df.iloc[-2]
-    # print("🔍 Latest feature extracted:")
-    # print(latest_data_df)
 
     nan_features = [feat for feat in feature_list if pd.isna(latest_data_df[feat])]
     
@@ -1397,23 +1929,20 @@ def extract_features(df):
     return feature_values
 
 spread_limits_low = {
-        "xau": 01.00, "jpy": 0.050,
         "gbpusd": 0.00050, 
         "usdcad": 0.00050
 }
 spread_limits_high = {
-        "xau": 09.00, "jpy": 0.350,
         "gbpusd": 0.00350, 
         "usdcad": 0.00350
 }
 
+                # === Entry Logics ===
+                        #----------------------------------------
+                        #       Buy 5Min TF
+                        #---------------------------------------- 
+                # ─── Define per‑symbol R:R thresholds ───
 
-
- # === Entry Logics ===
-        #----------------------------------------
-        #       Buy 5Min TF
-        #---------------------------------------- 
- # ─── Define per‑symbol R:R thresholds ───
 def buyM5(df_buy, response_data, symbol):
     RR_THRESHOLDS_BUY = {
         "XAUUSD+": 1.0,
@@ -1426,7 +1955,7 @@ def buyM5(df_buy, response_data, symbol):
     result = response_data.get("buy", {})
 
     if not result or not result.get("accepted"):
-        logger.info(f"{symbol}: buy skipped — not accepted by ML stack")
+        t_logger.info(f"{symbol}: buy skipped — not accepted by ML stack")
         return
 
     rr_pred = result.get("reg_pred")
@@ -1436,7 +1965,7 @@ def buyM5(df_buy, response_data, symbol):
     trade_type = result.get("trade_type", "buy")
 
     if rr_pred is None or meta_class is None:
-        logger.warning(f"{symbol}: buy skipped — incomplete ML prediction result")
+        t_logger.info(f"{symbol}: buy skipped — incomplete ML prediction result")
         return
 
     if symbol not in RR_THRESHOLDS_BUY:
@@ -1447,35 +1976,30 @@ def buyM5(df_buy, response_data, symbol):
     prev = df.iloc[-3]
     curr = df.iloc[-2]
     pair_code = curr['pair']
-    log_returns = curr['log_returns'] 
+    log_returns = curr['log_returns']
+    sma_200 = curr['SMA_200']
+    low = curr['Low'] 
 
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"❌ No spread limit defined for pair '{pair_code}'")
 
     if not curr.get("valid_hour", False):
-        logger.info(f"{symbol}: buy skipped — outside valid trading hours")
         return
 
     if rr_pred < rr_thresh:
-        logger.info(
-            f"{symbol}: Warning — RR_pred {rr_pred:.2f} below threshold {rr_thresh:.2f}, "
-            "but meta-model approved. Proceeding with trade."
-        )
+        return
+
    
-    # if log_returns <= 0.0001:
-    #     logger.info(
-    #         f"{symbol}: Alert skipping trade log returns too low "        
-    #     )
+    if log_returns <= 0.001 and  sma_200 >=  low:
+        return
+
+    # if meta_class == 1:
     #     return 
     
-    META_CONF_THRESH = {1: 0.85, 2: 0.85}
+    META_CONF_THRESH = {1: 0.80, 2: 0.70}
 
     if meta_class in META_CONF_THRESH:
         if meta_probs[meta_class] < META_CONF_THRESH[meta_class]:
-            logger.info(
-                f"{symbol}: Buy skipped — Meta class {meta_class} prob {meta_probs[meta_class]:.2f} "
-                f"below threshold {META_CONF_THRESH[meta_class]}"
-            )
             return  
 
     # === Trade Prices ===
@@ -1488,12 +2012,6 @@ def buyM5(df_buy, response_data, symbol):
     spread_high = spread_limits_high[pair_code]
 
     if sl_dist < spread_low or sl_dist > spread_high:
-        msg = (
-            f"{pair_code.upper()}: BUY skipped — SL distance {sl_dist:.5f} "
-            f"not in range ({spread_low:.5f} – {spread_high:.5f})"
-        )
-        logger.info(msg)
-        send_telegram_message(msg)
         return
 
     # === Execute Trade ===
@@ -1512,7 +2030,7 @@ def buyM5(df_buy, response_data, symbol):
 
     # === Telegram Message ===
     msg = (
-        f"{'-'*42}\n"
+        f"{'-'*42} TRADE\n"
         f"✅ ML BUY SIGNAL (5m) {symbol}\n"
         f"🎯 Entry      : {curr['entry_price']:.5f}\n"
         f"🛡️ StopLoss   : {sl_price:.5f}\n"
@@ -1521,7 +2039,7 @@ def buyM5(df_buy, response_data, symbol):
         f"📊 Classifier Probs:\n"
         f"   ├─ 1:1 : {clf_probs.get('clf_1_1_prob', 0):.2f}\n"
         f"   ├─ 1:2 : {clf_probs.get('clf_1_2_prob', 0):.2f}\n"
-        f"📊 Meta Probabilities:\n"
+        f"📊 Meta Probabilities: {meta_class}\n"
         f"   ├─ Reject : {meta_probs[0]:.2f}\n"
         f"   ├─ 1:1    : {meta_probs[1]:.2f}\n"
         f"   └─ 1:2    : {meta_probs[2]:.2f}\n"
@@ -1533,7 +2051,7 @@ def buyM5(df_buy, response_data, symbol):
         f"{'-'*42}"
     )
     send_telegram_message(msg)
-    logger.info(msg)
+    t_logger.info(msg)
 
 def sellM5(df_sell, response_data, symbol):
     RR_THRESHOLDS_SELL = {
@@ -1547,7 +2065,7 @@ def sellM5(df_sell, response_data, symbol):
     result = response_data.get("sell", {})
 
     if not result or not result.get("accepted"):
-        logger.info(f"{symbol}: sell skipped — not accepted by ML stack")
+        t_logger.info(f"{symbol}: sell skipped — not accepted by ML stack")
         return
 
     rr_pred = result.get("reg_pred")
@@ -1557,7 +2075,7 @@ def sellM5(df_sell, response_data, symbol):
     trade_type = result.get("trade_type", "sell")
 
     if rr_pred is None or meta_class is None:
-        logger.warning(f"{symbol}: sell skipped — incomplete ML prediction result")
+        t_logger.warning(f"{symbol}: sell skipped — incomplete ML prediction result")
         return
 
     if symbol not in RR_THRESHOLDS_SELL:
@@ -1569,32 +2087,27 @@ def sellM5(df_sell, response_data, symbol):
     curr = df.iloc[-2]
     pair_code = curr['pair']
     log_returns = curr['log_returns'] 
+    sma_200 = curr['SMA_200']
+    high = curr['High'] 
 
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"❌ No spread limit defined for pair '{pair_code}'")
 
     if not curr.get("valid_hour", False):
-        logger.info(f"{symbol}: sell skipped — outside valid trading hours")
         return
 
     if rr_pred < rr_thresh:
-        logger.info(
-            f"{symbol}: Warning — RR_pred {rr_pred:.2f} below threshold {rr_thresh:.2f}, "
-            "but meta-model approved. Proceeding with trade."
-        )
+        return
 
-    # if log_returns >= -0.0001:
-    #     logger.info(
-    #         f"{symbol}: Alert skipping trade log returns too  high"      
-    #     )
-    #     return
-    META_CONF_THRESH = {1: 0.85, 2: 0.85}
+    if log_returns >= -0.0001 and sma_200 <= high:
+        return
+
+    # if meta_class == 1:
+    #     return 
+        
+    META_CONF_THRESH = {1: 0.80, 2: 0.70}
     if meta_class in META_CONF_THRESH:
         if meta_probs[meta_class] < META_CONF_THRESH[meta_class]:
-            logger.info(
-                f"{symbol}: Buy skipped — Meta class {meta_class} prob {meta_probs[meta_class]:.2f} "
-                f"below threshold {META_CONF_THRESH[meta_class]}"
-            )
             return  
 
 
@@ -1608,12 +2121,6 @@ def sellM5(df_sell, response_data, symbol):
     spread_high = spread_limits_high[pair_code]
 
     if sl_dist < spread_low or sl_dist > spread_high:
-        msg = (
-            f"{pair_code.upper()}: SELL skipped — SL distance {sl_dist:.5f} "
-            f"not in range ({spread_low:.5f} – {spread_high:.5f})"
-        )
-        logger.info(msg)
-        send_telegram_message(msg)
         return
 
     # === Execute Trade ===
@@ -1632,7 +2139,7 @@ def sellM5(df_sell, response_data, symbol):
 
     # === Telegram Message ===
     msg = (
-        f"{'-'*42}\n"
+        f"{'-'*42} TRADE\n"   
         f"✅ ML SELL SIGNAL (5m) {symbol}\n"
         f"🎯 Entry      : {curr['entry_price']:.5f}\n"
         f"🛡️ StopLoss   : {sl_price:.5f}\n"
@@ -1641,7 +2148,7 @@ def sellM5(df_sell, response_data, symbol):
         f"📊 Classifier Probs:\n"
         f"   ├─ 1:1 : {clf_probs.get('clf_1_1_prob', 0):.2f}\n"
         f"   ├─ 1:2 : {clf_probs.get('clf_1_2_prob', 0):.2f}\n"
-        f"📊 Meta Probabilities:\n"
+        f"📊 Meta Probabilities: {meta_class}\n"
         f"   ├─ Reject : {meta_probs[0]:.2f}\n"
         f"   ├─ 1:1    : {meta_probs[1]:.2f}\n"
         f"   └─ 1:2    : {meta_probs[2]:.2f}\n"
@@ -1653,7 +2160,7 @@ def sellM5(df_sell, response_data, symbol):
         f"{'-'*42}"
     )
     send_telegram_message(msg)
-    logger.info(msg)
+    t_logger.info(msg)
 
 
 def send_telegram_message(text):
@@ -1661,7 +2168,7 @@ def send_telegram_message(text):
     # print(f"\n📨 Sending message to Telegram: {text}")
     print(f"\n📨 Sending message to Telegram")
     
-    payload = {"chat_id": CHAT_ID, "text": text}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
     
     try:
         response = requests.post(TELEGRAM_URL, json=payload)
@@ -1674,7 +2181,7 @@ def send_telegram_message(text):
     except requests.exceptions.RequestException as e:
         print(f"🚨 Telegram request failed: {e}")
 
-import os
+
 
 csv_write_lock = threading.Lock()
 def save_prediction_row_async(row_data: pd.Series, symbol: str, base_path: str = "latest_predictions", max_rows: int = 20000):
@@ -1710,126 +2217,174 @@ def save_prediction_row_async(row_data: pd.Series, symbol: str, base_path: str =
             print(f"⚠️ Threaded CSV write failed for {symbol}: {e}")
 
     threading.Thread(target=save).start()
-
-def get_predictions(features: pd.DataFrame, symbol: str, trade_type="buy",
-                    save_csv=False, csv_path="latest_predictions.csv", max_rows=20000):
+def get_predictions(
+    features: pd.DataFrame,
+    symbol: str,
+    trade_type="buy",
+    save_csv=False,
+    csv_path="latest_predictions.csv",
+    max_rows=20000,
+    thresh_meta: float | None = None,     # e.g., 0.85 if you want a confidence gate
+    metadata: dict | None = None          # pass your loaded model_metadata.pkl if available
+):
     """
-    Full stacked prediction pipeline:
-    - 2 Base Classifiers → Regression → Meta (Multi-Class) → Final Decision
+    Full stacked prediction pipeline (batch-safe):
+    - Base Classifiers -> Regressor -> Meta
+    - Returns a dict (single row) or a list of dicts (batch)
     """
     if not isinstance(features, pd.DataFrame):
         print(f"❌ 'features' must be a DataFrame for {symbol}")
         return None
-
     if trade_type not in ("buy", "sell"):
         print(f"❌ Invalid trade_type: '{trade_type}'")
         return None
 
+    # Ensure 'pair' dtype matches training (important for LightGBM categorical splits)
+    if 'pair' in features.columns:
+        if metadata and 'pair_categories' in metadata:
+            features = features.copy()
+            features['pair'] = pd.Categorical(features['pair'], categories=metadata['pair_categories'])
+        else:
+            # Best-effort: cast to categorical to avoid object dtype
+            features = features.copy()
+            features['pair'] = features['pair'].astype('category')
+
+    # Load boosters
     try:
         models = {
             "clf_1_1_prob": loaded_models[f"clf_{trade_type}_1.1"],
             "clf_1_2_prob": loaded_models[f"clf_{trade_type}_1.2"],
-            "reg_pred": loaded_models[f"reg_{trade_type}"],
-            "meta": loaded_models[f"meta_{trade_type}"]
+            "reg_pred":     loaded_models[f"reg_{trade_type}"],
+            "meta":         loaded_models[f"meta_{trade_type}"]
         }
     except KeyError as e:
         print(f"❌ Missing models for {trade_type.upper()}: {e}")
         return None
 
-    result = {
-        "symbol": symbol,
-        "trade_type": trade_type,
-        "accepted": False,
-        "final_class": None,
-        "class_probabilities": None,
-        "classifier_probs": {},
-        "reg_pred": None
-    }
+    n = len(features)
 
-    try:
-        # === Predict classifier probabilities ===
-        for clf_key in ["clf_1_1_prob", "clf_1_2_prob"]:
-            clf_model = models[clf_key]
-            clf_cols = clf_model.feature_name()
-            clf_input = features.reindex(columns=clf_cols, fill_value=0)
+    # --- 1) Base classifier probabilities (vectorized) ---
+    clf_probs = {}
+    for key in ("clf_1_1_prob", "clf_1_2_prob"):
+        booster = models[key]
+        cols = booster.feature_name()
+        X = features.reindex(columns=cols, fill_value=0)
 
-            if clf_input.shape[1] != len(clf_cols):
-                print(f"⚠️ {clf_key} feature count mismatch. Expected {len(clf_cols)}, got {clf_input.shape[1]}")
-                continue
+        if X.shape[1] != len(cols):
+            missing = [c for c in cols if c not in X.columns]
+            extra   = [c for c in X.columns if c not in cols]
+            print(f"⚠️ {key} feature mismatch. Expected {len(cols)} got {X.shape[1]}. "
+                  f"Missing: {missing[:5]}... Extra: {extra[:5]}...")
+        # LightGBM Booster.predict on binary returns prob for class 1
+        p = booster.predict(X)
+        p = np.asarray(p).reshape(-1)  # shape (n,)
+        if p.shape[0] != n:
+            raise RuntimeError(f"{key} produced {p.shape[0]} probs for {n} rows.")
+        clf_probs[key] = p
 
-            prob = clf_model.predict(clf_input)
-            # Ensure we get a single float value
-            if isinstance(prob, (np.ndarray, list)):
-                prob = float(prob[0])
-            result["classifier_probs"][clf_key] = float(prob)
+    # --- 2) Regressor (needs base probs as features) ---
+    reg_booster = models["reg_pred"]
+    reg_cols = reg_booster.feature_name()
+    X_reg = features.copy()
+    X_reg["clf_1_1_prob"] = clf_probs["clf_1_1_prob"]
+    X_reg["clf_1_2_prob"] = clf_probs["clf_1_2_prob"]
+    X_reg = X_reg.reindex(columns=reg_cols, fill_value=0)
+    rr_pred = reg_booster.predict(X_reg).reshape(-1)
 
-        # === Predict regression output ===
-        reg_model = models["reg_pred"]
-        reg_cols = reg_model.feature_name()
-        reg_input = features.copy()
-        reg_input["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
-        reg_input["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
-        reg_input_aligned = reg_input.reindex(columns=reg_cols, fill_value=0)
+    # --- 3) Meta (multiclass) ---
+    meta_booster = models["meta"]
+    meta_cols = meta_booster.feature_name()
+    X_meta = features.copy()
+    X_meta["clf_1_1_prob"] = clf_probs["clf_1_1_prob"]
+    X_meta["clf_1_2_prob"] = clf_probs["clf_1_2_prob"]
+    X_meta["reg_pred"]      = rr_pred
+    X_meta = X_meta.reindex(columns=meta_cols, fill_value=0)
 
-        if reg_input_aligned.shape[1] != len(reg_cols):
-            print(f"⚠️ Regressor feature count mismatch. Expected {len(reg_cols)}, got {reg_input_aligned.shape[1]}")
-            return result
+    meta_raw = meta_booster.predict(X_meta)  # (n, C) or (C,) if n==1
+    meta_raw = np.asarray(meta_raw)
+    if meta_raw.ndim == 1:   # single row -> (C,)
+        meta_raw = meta_raw.reshape(1, -1)
+    meta_class = meta_raw.argmax(axis=1).astype(int)          # 0=Reject, 1=1:1, 2=1:2
+    meta_conf  = meta_raw.max(axis=1)
 
-        reg_value = reg_model.predict(reg_input_aligned)
-        # Ensure we get a single float value
-        if isinstance(reg_value, (np.ndarray, list)):
-            reg_value = float(reg_value[0])
-        result["reg_pred"] = float(reg_value)
+    # Optional confidence gate
+    if thresh_meta is not None:
+        meta_class = np.where(meta_conf >= thresh_meta, meta_class, 0)
 
-        # === Predict meta classification ===
-        meta_model = models["meta"]
-        meta_cols = meta_model.feature_name()
-        meta_input = features.copy()
-        meta_input["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
-        meta_input["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
-        meta_input["reg_pred"] = reg_value
-        meta_input_aligned = meta_input.reindex(columns=meta_cols, fill_value=0)
+    # --- 4) Build outputs ---
+    out = []
+    for i in range(n):
+        row = {
+            "symbol": symbol,
+            "trade_type": trade_type,
+            "accepted": bool(meta_class[i] > 0),
+            "final_class": int(meta_class[i]),
+            "class_probabilities": meta_raw[i].tolist(),
+            "classifier_probs": {
+                "clf_1_1_prob": float(clf_probs["clf_1_1_prob"][i]),
+                "clf_1_2_prob": float(clf_probs["clf_1_2_prob"][i]),
+            },
+            "reg_pred": float(rr_pred[i]),
+            "meta_conf": float(meta_conf[i]),
+        }
+        out.append(row)
 
-        if meta_input_aligned.shape[1] != len(meta_cols):
-            print(f"⚠️ Meta-model feature count mismatch. Expected {len(meta_cols)}, got {meta_input_aligned.shape[1]}")
-            return result
+    # Console summary (single row)
+    if n == 1:
+        r = out[0]
+        cls = r["final_class"]
+        print(
+            f"{'✅' if r['accepted'] else '🔕'} "
+            f"{symbol} {trade_type.upper()} → Class {cls} | "
+            f"Conf {r['meta_conf']:.2f} | R:R {r['reg_pred']:.2f} | "
+            f"p1R {r['classifier_probs']['clf_1_1_prob']:.2f} p2R {r['classifier_probs']['clf_1_2_prob']:.2f}"
+        )
 
-        meta_raw = meta_model.predict(meta_input_aligned)
-        meta_class = int(np.argmax(meta_raw))
-        meta_probs = meta_raw.flatten().tolist()
+    # --- 5) Optional CSV logging (first row or all rows) ---
+    if save_csv:
+        try:
+            with csv_write_lock:
+                # Prepare new log rows
+                rows = []
+                for i in range(n):
+                    base = features.iloc[i].copy()
+                    base["timestamp"] = pd.Timestamp.utcnow()
+                    base["symbol"] = symbol
+                    base["trade_type"] = trade_type
+                    base["clf_1_1_prob"] = clf_probs["clf_1_1_prob"][i]
+                    base["clf_1_2_prob"] = clf_probs["clf_1_2_prob"][i]
+                    base["reg_pred"]     = rr_pred[i]
+                    base["meta_conf"]    = meta_conf[i]
+                    base["meta_class"]   = int(meta_class[i])
+                    base["accepted"]     = bool(meta_class[i] > 0)
+                    rows.append(base)
+
+                df_log = pd.DataFrame(rows)
+
+                # If file exists, append & trim
+                if os.path.exists(csv_path) and os.path.getsize(csv_path) > 0:
+                    try:
+                        old = pd.read_csv(csv_path)
+                        cat_cols = ['pair'] if 'pair' in old.columns else []
+                        for c in cat_cols:
+                            if c in df_log.columns:
+                                df_log[c] = df_log[c].astype(old[c].dtype)
+                        new = pd.concat([old, df_log], ignore_index=True)
+                        if len(new) > max_rows:
+                            new = new.iloc[-max_rows:]
+                        new.to_csv(csv_path, index=False)
+                    except pd.errors.EmptyDataError:
+                        # If file is empty, just write fresh
+                        df_log.to_csv(csv_path, index=False)
+                else:
+                    df_log.to_csv(csv_path, index=False)
+        except Exception as e:
+            print(f"⚠️ CSV logging failed: {e}")
 
 
-        result["final_class"] = meta_class
-        result["class_probabilities"] = meta_probs
-        result["accepted"] = meta_class > 0
+    # Return single dict or list of dicts
+    return out[0] if n == 1 else out
 
-        if result["accepted"]:
-            print(f"✅ {symbol} {trade_type.upper()} accepted → Class {meta_class} | R:R: {reg_value:.2f}")
-        else:
-            print(f"🔕 {symbol} {trade_type.upper()} rejected → Class {meta_class} | R:R: {reg_value:.2f}")
-
-        # === Optional threaded CSV saving ===
-        if save_csv:
-            try:
-                row_data = features.iloc[0].copy()  # Use first row if multiple rows
-                row_data["timestamp"] = pd.Timestamp.utcnow()
-                row_data["symbol"] = symbol
-                row_data["trade_type"] = trade_type
-                row_data["clf_1_1_prob"] = result["classifier_probs"].get("clf_1_1_prob", 0.0)
-                row_data["clf_1_2_prob"] = result["classifier_probs"].get("clf_1_2_prob", 0.0)
-                row_data["reg_pred"] = reg_value
-                row_data["meta_class"] = meta_class
-                row_data["accepted"] = result["accepted"]
-
-                save_prediction_row_async(row_data=row_data, symbol=symbol, base_path="latest_predictions", max_rows=max_rows)
-            except Exception as e:
-                print(f"⚠️ Failed to prepare prediction row for {symbol}: {e}")
-
-        return result
-
-    except Exception as e:
-        print(f"❌ Pipeline error: {type(e).__name__} - {str(e)}")
-        return None
 # === CONFIG ===
 SYMBOLS = ["GBPUSD+", "USDCAD+"] #"USDJPY+","XAUUSD+", 
 
@@ -2073,7 +2628,7 @@ def run_parallel_symbol_loops():
             thread_name_prefix=f"Work_{symbol}"
         )
         t = threading.Thread(
-            target=symbol_loop,
+            target=symbol_loop, 
             args=(symbol,),
             name=f"Thread_{symbol}",
             daemon=True
@@ -2091,7 +2646,7 @@ if __name__ == "__main__":
     trading_logger.info(f"📌 Symbols: {', '.join(SYMBOLS)}")
     trading_logger.info(f"🧵 {MAX_WORKERS_PER_SYMBOL} workers per symbol")
 
-    if initialize_mt5(login, password, server):
+    if initialize_mt5(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER):
         trading_logger.info("✅ MT5 Initialized Successfully")
         
         # Start all components
