@@ -1,257 +1,477 @@
-# ===========================
-# stack_part2.py
-# ===========================
-# Trains a multiclass META model:
-# Input = [all base probs + rr_pred + FULL features]
-# Output = final class + probabilities
-# Saves: best params, OOF/Test metrics, confusion matrices, PR curves, thresholded profit sim.
+# ==============================#
+#  STACKED 3×MULTICLASS (±1/0/1)
+#  + REGRESSOR (rr_label)
+#  + META (0,1,2,3)
+# ==============================#
 
-import os, re, json, argparse
+import os
+import re
+import json
+import joblib
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import optuna
+from typing import Dict, List, Tuple
 
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.metrics import (confusion_matrix, classification_report, log_loss,
-                             f1_score, accuracy_score, roc_auc_score, precision_recall_curve)
-from sklearn.impute import SimpleImputer
+from lightgbm import LGBMClassifier, LGBMRegressor
 
-RANDOM_STATE = 42
-N_SPLITS = 5
-MAX_EARLY_STOP = 200
-N_TRIALS = 60
-
-def ensure_dir(d): os.makedirs(d, exist_ok=True)
-
-def parse_rr_from_target(name, default_rr=1.0):
-    import re
-    m = re.search(r"y_([0-9]+(?:\.[0-9]+)?)R", name)
-    return float(m.group(1)) if m else float(default_rr)
-
-def plot_cm(cm, classes, title, outpath):
-    fig = plt.figure(); ax = fig.add_subplot(111)
-    im = ax.imshow(cm, interpolation='nearest'); ax.set_title(title); plt.colorbar(im)
-    ticks = np.arange(len(classes))
-    ax.set_xticks(ticks); ax.set_xticklabels(classes, rotation=45)
-    ax.set_yticks(ticks); ax.set_yticklabels(classes)
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(j,i,f"{cm[i,j]:d}",ha="center",va="center")
-    ax.set_ylabel("True"); ax.set_xlabel("Pred"); fig.tight_layout()
-    fig.savefig(outpath, dpi=140, bbox_inches='tight'); plt.close(fig)
-
-def plot_pr(y_true_012, proba, pos_idx, title, outpath):
-    from sklearn.metrics import precision_recall_curve
-    yb = (y_true_012==pos_idx).astype(int)
-    P,R,_ = precision_recall_curve(yb, proba[:,pos_idx])
-    fig = plt.figure(); ax = fig.add_subplot(111); ax.plot(R,P)
-    ax.set_title(title); ax.set_xlabel("Recall"); ax.set_ylabel("Precision")
-    fig.savefig(outpath, dpi=140, bbox_inches='tight'); plt.close(fig)
-
-def summarize(y_true, y_pred, proba):
-    names = ["loss","neutral","win"]
-    return {
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "macro_f1": float(f1_score(y_true, y_pred, average="macro")),
-        "logloss": float(log_loss(y_true, proba, labels=[0,1,2])),
-        "roc_auc_win_ovr": float(roc_auc_score((y_true==2).astype(int), proba[:,2])),
-        "report": classification_report(y_true, y_pred, target_names=names)
-    }
-
-def optimize_thresholds(y_true, proba, rr_win):
-    p_loss, p_win = proba[:,0], proba[:,2]
-    best = {"th_win":0.5,"th_loss":0.2,"expR_per_trade":-999.0,"take_rate":0.0}
-    for thw in np.linspace(0.40,0.90,26):
-        for thl in np.linspace(0.00,0.50,26):
-            take = (p_win>=thw) & (p_loss<=thl)
-            if not np.any(take): continue
-            sel = y_true[take]
-            wins = int(np.sum(sel==2)); losses = int(np.sum(sel==0)); total = len(sel)
-            expR = (wins*rr_win - losses*1.0)/total
-            if expR > best["expR_per_trade"]:
-                best = {"th_win":float(thw),"th_loss":float(thl),
-                        "expR_per_trade":float(expR),
-                        "take_rate":float(total/len(y_true))}
-    return best
-
-# ------ tuning / fit for meta
-def tune_lgbm_meta(X, y, Xv, yv, n_trials):
-    import lightgbm as lgb
-    def obj(trial):
-        params = {
-            "objective":"multiclass","num_class":3,"boosting_type":"gbdt","verbosity":-1,
-            "learning_rate": trial.suggest_float("learning_rate",0.02,0.2,log=True),
-            "num_leaves":   trial.suggest_int("num_leaves",16,256,log=True),
-            "max_depth":    trial.suggest_int("max_depth",4,12),
-            "min_child_samples": trial.suggest_int("min_child_samples",10,200),
-            "subsample": trial.suggest_float("subsample",0.6,1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree",0.6,1.0),
-            "reg_lambda": trial.suggest_float("reg_lambda",1e-3,50,log=True),
-            "reg_alpha":  trial.suggest_float("reg_alpha",1e-3,10,log=True),
-        }
-        m = lgb.LGBMClassifier(**params, n_estimators=5000, random_state=RANDOM_STATE, n_jobs=-1)
-        m.fit(X,y, eval_set=[(Xv,yv)], eval_metric="multi_logloss",
-              callbacks=[lgb.early_stopping(stopping_rounds=MAX_EARLY_STOP, verbose=False)])
-        p = m.predict_proba(Xv)
-        return log_loss(yv, p, labels=[0,1,2])
-    study = optuna.create_study(direction="minimize")
-    study.optimize(obj, n_trials=n_trials, show_progress_bar=False)
-    return study.best_params
-
-def tune_xgb_meta(X, y, Xv, yv, n_trials):
-    import xgboost as xgb
-    def obj(trial):
-        params = {
-            "objective":"multi:softprob","num_class":3,"eval_metric":"mlogloss",
-            "tree_method":"hist","max_bin": trial.suggest_int("max_bin",128,512),
-            "learning_rate": trial.suggest_float("learning_rate",0.02,0.2,log=True),
-            "max_depth": trial.suggest_int("max_depth",3,10),
-            "min_child_weight": trial.suggest_float("min_child_weight",1e-3,10,log=True),
-            "gamma": trial.suggest_float("gamma",0.0,5.0),
-            "subsample": trial.suggest_float("subsample",0.6,1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree",0.6,1.0),
-            "reg_lambda": trial.suggest_float("reg_lambda",1e-3,50,log=True),
-            "reg_alpha":  trial.suggest_float("reg_alpha",1e-3,10,log=True),
-        }
-        m = xgb.XGBClassifier(**params, n_estimators=5000, random_state=RANDOM_STATE, nthread=-1)
-        m.fit(X,y, eval_set=[(Xv,yv)], verbose=False, early_stopping_rounds=MAX_EARLY_STOP)
-        p = m.predict_proba(Xv)
-        return log_loss(yv, p, labels=[0,1,2])
-    study = optuna.create_study(direction="minimize")
-    study.optimize(obj, n_trials=n_trials, show_progress_bar=False)
-    return study.best_params
-
-def fit_meta(lib, params, X, y, Xv=None, yv=None):
-    if lib=="lgbm":
-        import lightgbm as lgb
-        m = lgb.LGBMClassifier(**params, n_estimators=5000, random_state=RANDOM_STATE, n_jobs=-1)
-        m.fit(X,y, eval_set=[(Xv,yv)] if Xv is not None else None, eval_metric="multi_logloss",
-              callbacks=[lgb.early_stopping(stopping_rounds=MAX_EARLY_STOP, verbose=False)] if Xv is not None else None)
-        return m
-    else:
-        import xgboost as xgb
-        m = xgb.XGBClassifier(**params, n_estimators=5000, random_state=RANDOM_STATE, nthread=-1)
-        m.fit(X,y, eval_set=[(Xv,yv)] if Xv is not None else None, verbose=False,
-              early_stopping_rounds=MAX_EARLY_STOP if Xv is not None else None)
-        return m
-
-def plot_feat_imp(model, names, out, topn=40):
-    try: imp = model.feature_importances_
-    except: return
-    idx = np.argsort(imp)[::-1][:topn]
-    vals = imp[idx]; labs = [names[i] for i in idx]
-    fig = plt.figure(); ax = fig.add_subplot(111); ax.barh(range(len(labs)), vals[::-1])
-    ax.set_yticks(range(len(labs))); ax.set_yticklabels(labs[::-1])
-    ax.set_title("Meta Feature Importance"); fig.tight_layout()
-    fig.savefig(out, dpi=140, bbox_inches='tight'); plt.close(fig)
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
+from sklearn.metrics import (
+    classification_report, confusion_matrix, roc_auc_score,
+    f1_score, accuracy_score,
+    mean_absolute_error, mean_squared_error, r2_score
+)
+from sklearn.base import clone
 
 # -----------------------------
-def main(base_dir, meta_model_lib, meta_target):
-    if base_dir is None:
-        base_dir = f"artifacts_stack_baseFULL_{meta_target}_lgbm"
-    if not os.path.isdir(base_dir):
-        raise FileNotFoundError(base_dir)
+# Config
+# -----------------------------
+DATA_PATH = "test-combined.csv"       # <- your labeled dataset
+MODEL_DIR = "./tmodel_artifacts_3xmc_meta_v1/"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-    Xtr = pd.read_csv(os.path.join(base_dir,"meta_train_features.csv"))
-    Xte = pd.read_csv(os.path.join(base_dir,"meta_test_features.csv"))
-    ytr = pd.read_csv(os.path.join(base_dir,"y_train_meta.csv"))["y_train_meta"].astype(int).values
-    yte = pd.read_csv(os.path.join(base_dir,"y_test_meta.csv"))["y_test_meta"].astype(int).values
+RANDOM_STATE = 42
+N_TRIALS_BASE = 40
+N_TRIALS_REG  = 40
+N_TRIALS_META = 40
+N_SPLITS_OOF  = 3
+N_SPLITS_CV   = 3
 
-    # Impute any residual NaNs
-    imp = SimpleImputer(strategy="median")
-    Xtr[:] = imp.fit_transform(Xtr); Xte[:] = imp.transform(Xte)
+THRESHOLDS = [1, 2, 3]   # target R:R thresholds
 
-    # tune on a small split of Xtr
-    X1,X2,Y1,Y2 = train_test_split(Xtr, ytr, test_size=0.2, stratify=ytr, random_state=RANDOM_STATE)
-    best = tune_lgbm_meta(X1,Y1,X2,Y2,N_TRIALS) if meta_model_lib=="lgbm" else tune_xgb_meta(X1,Y1,X2,Y2,N_TRIALS)
+# -----------------------------
+# Helpers
+# -----------------------------
+def rmse(y_true, y_pred):
+    return float(np.sqrt(((y_true - y_pred) ** 2).mean()))
 
-    # OOF
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
-    oof = np.zeros((len(Xtr),3))
-    for k,(i_tr,i_va) in enumerate(skf.split(Xtr,ytr),1):
-        m = fit_meta(meta_model_lib, best, Xtr.iloc[i_tr], ytr[i_tr], Xtr.iloc[i_va], ytr[i_va])
-        oof[i_va] = m.predict_proba(Xtr.iloc[i_va])
-        print(f"[meta] fold {k} done")
+def save_text(path: str, text: str):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
-    # final model and test predictions
-    final = fit_meta(meta_model_lib, best, X1, Y1, X2, Y2)
-    te_proba = final.predict_proba(Xte)
-    te_pred = te_proba.argmax(1)
+def ensure_category(df: pd.DataFrame, col: str):
+    if col in df.columns:
+        df[col] = df[col].astype("category")
 
-    # Metrics
-    oof_cls = oof.argmax(1)
-    names = ["loss","neutral","win"]
-    oof_metrics = {
-        "accuracy": float(accuracy_score(ytr, oof_cls)),
-        "macro_f1": float(f1_score(ytr, oof_cls, average="macro")),
-        "logloss": float(log_loss(ytr, oof, labels=[0,1,2])),
-        "roc_auc_win_ovr": float(roc_auc_score((ytr==2).astype(int), oof[:,2])),
-        "report": classification_report(ytr, oof_cls, target_names=names)
-    }
-    te_metrics = {
-        "accuracy": float(accuracy_score(yte, te_pred)),
-        "macro_f1": float(f1_score(yte, te_pred, average="macro")),
-        "logloss": float(log_loss(yte, te_proba, labels=[0,1,2])),
-        "roc_auc_win_ovr": float(roc_auc_score((yte==2).astype(int), te_proba[:,2])),
-        "report": classification_report(yte, te_pred, target_names=names)
-    }
+def find_y_columns_for_thresholds(df: pd.DataFrame, thr_list: List[int]) -> Dict[int, str]:
+    """
+    Map each threshold to an existing tri-class y column in df.
+    Accepts columns like y_1R, y_1.2R, y_2.2R, y_3.2R, etc. Picks the closest (by float) per threshold.
+    """
+    pattern = re.compile(r"^y_(\d+(?:\.\d+)?)R$")
+    candidates = []
+    for c in df.columns:
+        m = pattern.match(c)
+        if m is not None:
+            v = float(m.group(1))
+            candidates.append((c, v))
+    if not candidates:
+        raise KeyError("No y_*R columns found. Expected columns like y_1R, y_2R, y_3R or y_1.2R, etc.")
 
-    # Threshold optimization on OOF → apply to test for profit
-    rr_win = parse_rr_from_target(meta_target, default_rr=1.0)
-    th = optimize_thresholds(ytr, oof, rr_win)
-    take = (te_proba[:,2] >= th["th_win"]) & (te_proba[:,0] <= th["th_loss"])
-    sel = yte[take]
-    wins = int(np.sum(sel==2)); losses = int(np.sum(sel==0)); neutrals = int(np.sum(sel==1))
-    total = len(sel); expR = (wins*rr_win - losses*1.0)/total if total else 0.0
-    take_rate = total/len(yte) if len(yte) else 0.0
+    mapping = {}
+    for t in thr_list:
+        # find closest by |v - t|
+        best = min(candidates, key=lambda cv: abs(cv[1] - t))
+        mapping[t] = best[0]
+    return mapping
 
-    # Save artifacts
-    meta_dir = f"artifacts_stack_META_{meta_target}_{meta_model_lib}"
-    ensure_dir(meta_dir)
-    with open(os.path.join(meta_dir,"best_params.json"),"w") as f: json.dump(best,f,indent=2)
-    with open(os.path.join(meta_dir,"metrics.json"),"w") as f:
-        json.dump({
-            "oof":oof_metrics,"test":te_metrics,"rr_win":rr_win,"thresholds":th,
-            "test_trading_summary":{"selected":total,"take_rate":take_rate,"wins":wins,"losses":losses,
-                                    "neutrals":neutrals,"expR_per_trade":expR}
-        }, f, indent=2)
+def tri_class_remap(y: pd.Series) -> Tuple[np.ndarray, Dict[int,int], Dict[int,int]]:
+    """
+    LightGBM multiclass expects labels {0..K-1}.
+    We map {-1,0,1} -> {0,1,2}.
+    Returns encoded y, forward map, inverse map.
+    """
+    fwd = {-1: 0, 0: 1, 1: 2}
+    inv = {v: k for k, v in fwd.items()}
+    y_enc = y.map(fwd).astype("int32").values
+    return y_enc, fwd, inv
 
-    pd.DataFrame(oof, columns=[f"proba_{c}" for c in names]).assign(y_true=ytr)\
-      .to_csv(os.path.join(meta_dir,"oof_predictions.csv"), index=False)
-    pd.DataFrame(te_proba, columns=[f"proba_{c}" for c in names]).assign(y_true=yte, take=take.astype(int))\
-      .to_csv(os.path.join(meta_dir,"test_predictions.csv"), index=False)
+def inv_freq_weights_multi(y_enc: np.ndarray) -> Dict[int, float]:
+    vals, counts = np.unique(y_enc, return_counts=True)
+    N, K = len(y_enc), len(vals)
+    w = {}
+    for v, c in zip(vals, counts):
+        w[int(v)] = float(N / (K * max(c, 1)))
+    return w
 
-    cm_oof = confusion_matrix(ytr, oof_cls, labels=[0,1,2])
-    plot_cm(cm_oof, names, f"Meta OOF Confusion ({meta_target})", os.path.join(meta_dir,"cm_oof.png"))
-    cm_test = confusion_matrix(yte, te_pred, labels=[0,1,2])
-    plot_cm(cm_test, names, f"Meta Test Confusion ({meta_target})", os.path.join(meta_dir,"cm_test.png"))
-    plot_pr(ytr, oof, 2, f"OOF PR (win) - {meta_target}", os.path.join(meta_dir,"pr_win_oof.png"))
-    plot_pr(yte, te_proba, 2, f"Test PR (win) - {meta_target}", os.path.join(meta_dir,"pr_win_test.png"))
+def dump_importance(model, cols, path, title):
+    if hasattr(model, "feature_importances_"):
+        imp = pd.DataFrame({"Feature": cols, "Importance": model.feature_importances_}) \
+              .sort_values("Importance", ascending=False)
+        imp.to_csv(path, index=False)
+        print(f"{title} top10:\n", imp.head(10), "\n")
+        return imp
+    else:
+        print(f"⚠️ No feature_importances_ for {title}")
+        return pd.DataFrame()
 
-    # feature importance
-    try: plot_feat_imp(final, Xtr.columns.tolist(), os.path.join(meta_dir,"feature_importance.png"), topn=40)
-    except: pass
+def report_multiclass(y_true_enc: np.ndarray, y_pred_enc: np.ndarray, label_names: List[str]) -> str:
+    rep = classification_report(y_true_enc, y_pred_enc, target_names=label_names, digits=4, zero_division=0)
+    cf  = confusion_matrix(y_true_enc, y_pred_enc)
+    return rep + "\nConfusion Matrix:\n" + str(cf)
 
-    print("\n=== OOF (meta) ==="); print(json.dumps(oof_metrics, indent=2))
-    print("\n=== Test (meta) ==="); print(json.dumps(te_metrics, indent=2))
-    print("\n=== Thresholds ===", th)
-    print("Selected:", total, "Take rate:", f"{take_rate:.2%}", "Wins:", wins, "Losses:", losses, "Neutrals:", neutrals)
-    print("Expected R/trade:", f"{expR:.3f}")
-    print("Artifacts →", meta_dir)
+# -----------------------------
+# CV scorers
+# -----------------------------
+def cv_score_multiclass(params, X, y_enc, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    scores = []
+    for tr, va in skf.split(X, y_enc):
+        m = LGBMClassifier(**params)
+        m.fit(X.iloc[tr], y_enc[tr], categorical_feature=['pair'])
+        pred = m.predict(X.iloc[va])
+        scores.append(f1_score(y_enc[va], pred, average="weighted"))
+    return float(np.mean(scores))  # maximize
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base_dir", type=str, default=None,
-                    help="Dir from Part 1. If None, defaults to artifacts_stack_baseFULL_<meta_target>_lgbm")
-    ap.add_argument("--meta_model", type=str, default="lgbm", choices=["lgbm","xgb"])
-    ap.add_argument("--meta_target", type=str, default="y_2.2R")
-    args = ap.parse_args()
-    main(args.base_dir, args.meta_model, args.meta_target)
+def cv_score_regressor(params, X, y, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    scores = []
+    for tr, va in kf.split(X, y):
+        m = LGBMRegressor(**params)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        pred = m.predict(X.iloc[va])
+        scores.append(rmse(y.iloc[va], pred))
+    return float(np.mean(scores))  # lower is better
 
-    # If Part 1 used LightGBM and meta_target y_2.2R:
-# python stack_part2.py --meta_target y_2.2R --meta_model lgbm
+# -----------------------------
+# Optuna tuning
+# -----------------------------
+def tune_multiclass_params(X, y_enc, name="mc"):
+    weight_grid = [
+        None,
+        "balanced",
+        inv_freq_weights_multi(y_enc),
+        {0:1.0, 1:1.2, 2:1.5},
+        {0:1.5, 1:1.0, 2:1.5}
+    ]
+    def objective(trial):
+        params = {
+            "objective": "multiclass",
+            "num_class": 3,
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 200, 900),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+            "class_weight": trial.suggest_categorical("class_weight", weight_grid),
+        }
+        return cv_score_multiclass(params, X, y_enc)
+    study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_BASE)
+    return study.best_params
 
-# # Explicit base dir (if you changed defaults)
-# python stack_part2.py --base_dir artifacts_stack_baseFULL_y_2.2R_lgbm --meta_model xgb --meta_target y_2.2R
+def tune_regressor_params(X, y, name="reg"):
+    def objective(trial):
+        params = {
+            "objective": "regression",
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 200, 900),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+        }
+        return cv_score_regressor(params, X, y)
+    study = optuna.create_study(direction="minimize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_REG)
+    return study.best_params
 
+def tune_meta_params(X, y_enc, name="meta"):
+    weight_grid = [
+        None,
+        "balanced",
+        inv_freq_weights_multi(y_enc),
+        {0:1.0, 1:1.2, 2:1.4, 3:1.6}
+    ]
+    # num_class determined by unique(y_enc)
+    num_class = int(len(np.unique(y_enc)))
+    def objective(trial):
+        params = {
+            "objective": "multiclass",
+            "num_class": num_class,
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 200, 900),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+            "class_weight": trial.suggest_categorical("class_weight", weight_grid),
+        }
+        skf = StratifiedKFold(n_splits=N_SPLITS_CV, shuffle=True, random_state=RANDOM_STATE)
+        f1s = []
+        for tr, va in skf.split(X, y_enc):
+            m = LGBMClassifier(**params)
+            m.fit(X.iloc[tr], y_enc[tr], categorical_feature=['pair'])
+            pred = m.predict(X.iloc[va])
+            f1s.append(f1_score(y_enc[va], pred, average="weighted"))
+        return float(np.mean(f1s))
+    study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_META)
+    return study.best_params
+
+# -----------------------------
+# OOF helpers
+# -----------------------------
+def oof_multiclass(base_estimator, X, y_enc, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE) -> Tuple[np.ndarray, List]:
+    """
+    Returns OOF probabilities (N,3) and trained fold models.
+    """
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    oof = np.zeros((len(X), 3), dtype=float)
+    models = []
+    for tr, va in skf.split(X, y_enc):
+        m = clone(base_estimator)
+        m.fit(X.iloc[tr], y_enc[tr], categorical_feature=['pair'])
+        oof[va, :] = m.predict_proba(X.iloc[va])
+        models.append(m)
+    return oof, models
+
+def oof_regressor(base_estimator, X, y, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE) -> Tuple[np.ndarray, List]:
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    oof = np.zeros(len(X), dtype=float)
+    models = []
+    for tr, va in kf.split(X, y):
+        m = clone(base_estimator)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        oof[va] = m.predict(X.iloc[va])
+        models.append(m)
+    return oof, models
+
+# -----------------------------
+# Feature builders (stacking)
+# -----------------------------
+def add_base_probs_features(X: pd.DataFrame, prob_dict: Dict[int, np.ndarray]) -> pd.DataFrame:
+    """
+    prob_dict: {threshold -> (N,3) probs in class order [p(-1), p(0), p(1)]}
+    Adds features:
+      clf_T_pneg1, clf_T_p0, clf_T_p1, clf_T_ev  (where ev = -1*pneg1 + 0*p0 + 1*p1)
+    """
+    Xf = X.copy()
+    for t, probs in prob_dict.items():
+        p_neg1 = probs[:, 0]
+        p_0    = probs[:, 1]
+        p_1    = probs[:, 2]
+        Xf[f'clf_{t}R_pneg1'] = p_neg1
+        Xf[f'clf_{t}R_p0']    = p_0
+        Xf[f'clf_{t}R_p1']    = p_1
+        Xf[f'clf_{t}R_ev']    = (-1.0 * p_neg1) + (0.0 * p_0) + (1.0 * p_1)
+    return Xf
+
+def build_meta_features(X: pd.DataFrame, prob_dict: Dict[int, np.ndarray], reg_vec: np.ndarray) -> pd.DataFrame:
+    Xf = add_base_probs_features(X, prob_dict)
+    Xf['reg_pred'] = reg_vec
+    return Xf
+
+# -----------------------------
+# Load & prepare
+# -----------------------------
+df = pd.read_csv(DATA_PATH)
+
+# Ensure pair is categorical
+ensure_category(df, 'pair')
+
+# Map thresholds -> available y_*R columns
+thr_to_col = find_y_columns_for_thresholds(df, THRESHOLDS)
+
+# Keep only rows where all needed y_*R columns exist (drop NaNs across all three)
+needed_cols = [thr_to_col[t] for t in THRESHOLDS]
+mask_all = np.ones(len(df), dtype=bool)
+for c in needed_cols:
+    mask_all &= df[c].notna().values
+df = df.loc[mask_all].reset_index(drop=True)
+
+# Targets
+rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
+
+# Meta 4-class: 0:<1R, 1:[1,2), 2:[2,3), 3:>=3
+bins_meta = [-np.inf, 1, 2, 3, np.inf]
+y_meta4 = pd.cut(rr, bins=bins_meta, labels=False, right=False, include_lowest=True).astype('int32').values
+
+# Build feature list: exclude targets & rr_label & any y_*R columns
+drop_cols = set(['rr_label'])
+for c in df.columns:
+    if re.match(r"^y_(\d+(\.\d+)?)R$", c):
+        drop_cols.add(c)
+features = [c for c in df.columns if c not in drop_cols]
+
+# Split (stratify by meta action)
+X_train, X_test, y_meta_train, y_meta_test = train_test_split(
+    df[features], y_meta4, test_size=0.2, random_state=RANDOM_STATE, stratify=y_meta4
+)
+
+# Also keep aligned full rr_label and per-threshold labels for train/test
+rr_train = rr.iloc[X_train.index]
+rr_test  = rr.iloc[X_test.index]
+
+y_thr_train = {t: df.loc[X_train.index, thr_to_col[t]].astype('int32') for t in THRESHOLDS}
+y_thr_test  = {t: df.loc[X_test.index,  thr_to_col[t]].astype('int32') for t in THRESHOLDS}
+
+# -----------------------------
+# 1) Tune + OOF for each base tri-class classifier
+# -----------------------------
+best_params_base = {}
+oof_probs_train = {}    # {t: (N_train,3)}
+models_base = {}        # {t: [fold models]}
+label_names_triclass = ["loss(-1)", "neutral(0)", "win(+1)"]
+
+for t in THRESHOLDS:
+    print(f"\n>>> Tuning base multiclass for {t}R using column '{thr_to_col[t]}'")
+    y_enc_train, fwd_map, inv_map = tri_class_remap(y_thr_train[t])
+    params_t = tune_multiclass_params(X_train, y_enc_train, name=f"mc_{t}R")
+    best_params_base[t] = params_t
+
+    base = LGBMClassifier(**params_t)
+    oof_probs, models = oof_multiclass(base, X_train, y_enc_train)
+    oof_probs_train[t] = oof_probs
+    models_base[t] = models
+
+    # Holdout evaluation
+    # build test probs by fold-ensemble
+    p_test = np.mean([m.predict_proba(X_test) for m in models], axis=0)
+    y_test_enc, _, _ = tri_class_remap(y_thr_test[t])
+    y_pred_enc = np.argmax(p_test, axis=1)
+
+    rep = report_multiclass(y_test_enc, y_pred_enc, label_names_triclass)
+    print(f"\n=== BASE {t}R (multiclass -1/0/1) ===\n{rep}")
+    save_text(f"{MODEL_DIR}eval_base_{t}R.txt", rep)
+
+# -----------------------------
+# 2) Regressor on rr_label using OOF probs
+# -----------------------------
+X_train_reg = add_base_probs_features(X_train, oof_probs_train)
+best_params_reg = tune_regressor_params(X_train_reg, rr_train, name="reg_rr")
+reg_base = LGBMRegressor(**best_params_reg)
+
+oof_reg_train, reg_models = oof_regressor(reg_base, X_train_reg, rr_train)
+
+# Holdout eval (build test-side features using fold models)
+test_probs = {t: np.mean([m.predict_proba(X_test) for m in models_base[t]], axis=0)
+              for t in THRESHOLDS}
+X_test_reg  = add_base_probs_features(X_test, test_probs)
+regressor   = LGBMRegressor(**best_params_reg).fit(X_train_reg, rr_train, categorical_feature=['pair'])
+reg_pred    = regressor.predict(X_test_reg)
+
+reg_report  = (
+    f"MAE:  {mean_absolute_error(rr_test, reg_pred):.6f}\n"
+    f"RMSE: {rmse(rr_test, reg_pred):.6f}\n"
+    f"R2:   {r2_score(rr_test, reg_pred):.6f}\n"
+)
+print("\n=== REGRESSOR (rr_label) ===")
+print(reg_report)
+save_text(f"{MODEL_DIR}eval_regressor.txt", reg_report)
+
+# -----------------------------
+# 3) Meta model (0,1,2,3) using base probs + reg
+# -----------------------------
+X_train_meta = build_meta_features(X_train, oof_probs_train, oof_reg_train)
+best_params_meta = tune_meta_params(X_train_meta, y_meta_train, name="meta_4class")
+meta_model = LGBMClassifier(**best_params_meta).fit(X_train_meta, y_meta_train, categorical_feature=['pair'])
+
+X_test_meta  = build_meta_features(X_test, test_probs, reg_pred)
+meta_pred    = meta_model.predict(X_test_meta)
+
+meta_names = ["Reject(0)", "Target1R(1)", "Target2R(2)", "Target3R(3)"][:int(len(np.unique(y_meta_train)))]
+meta_rep = classification_report(y_meta_test, meta_pred, target_names=meta_names, digits=4, zero_division=0)
+meta_cf  = confusion_matrix(y_meta_test, meta_pred)
+meta_txt = meta_rep + "\nConfusion Matrix:\n" + str(meta_cf)
+print("\n=== META (0/1/2/3) ===")
+print(meta_txt)
+save_text(f"{MODEL_DIR}eval_meta.txt", meta_txt)
+
+# -----------------------------
+# 4) Train final single models on ALL data
+# -----------------------------
+print("\nTraining final models on ALL data...")
+
+# restrict full DF to rows used earlier (have all labels)
+df_full = df.copy()
+X_full  = df_full[features]
+ensure_category(X_full, 'pair')
+
+# full tri-class labels per threshold encoded
+y_full_thr = {t: df_full[thr_to_col[t]].astype('int32') for t in THRESHOLDS}
+y_full_thr_enc = {t: tri_class_remap(y_full_thr[t])[0] for t in THRESHOLDS}
+
+# full rr / meta targets
+rr_full     = pd.to_numeric(df_full['rr_label'], errors='coerce').fillna(-1.0)
+y_meta_full = pd.cut(rr_full, bins=bins_meta, labels=False, right=False, include_lowest=True).astype('int32').values
+
+# Final base models
+final_base = {}
+for t in THRESHOLDS:
+    print(f"Fitting final base multiclass {t}R ...")
+    m = LGBMClassifier(**best_params_base[t]).fit(X_full, y_full_thr_enc[t], categorical_feature=['pair'])
+    final_base[t] = m
+
+# Final regressor features/preds
+p_full = {t: final_base[t].predict_proba(X_full) for t in THRESHOLDS}
+X_full_reg = add_base_probs_features(X_full, p_full)
+reg_final  = LGBMRegressor(**best_params_reg).fit(X_full_reg, rr_full, categorical_feature=['pair'])
+
+# Final meta features/model
+reg_full_pred = reg_final.predict(X_full_reg)
+X_full_meta   = build_meta_features(X_full, p_full, reg_full_pred)
+meta_final    = LGBMClassifier(**best_params_meta).fit(X_full_meta, y_meta_full, categorical_feature=['pair'])
+
+# -----------------------------
+# 5) Save artifacts & metadata
+# -----------------------------
+for t, model in final_base.items():
+    model.booster_.save_model(f"{MODEL_DIR}classifier_{t}R.txt")
+reg_final.booster_.save_model(f"{MODEL_DIR}regressor.txt")
+meta_final.booster_.save_model(f"{MODEL_DIR}meta_model.txt")
+
+metadata = {
+    "features": features,
+    "thresholds": THRESHOLDS,
+    "thr_to_col": thr_to_col,
+    "label_names_triclass": ["loss(-1)","neutral(0)","win(+1)"],
+    "meta_names": ["Reject(0)","Target1R(1)","Target2R(2)","Target3R(3)"],
+    "best_params": {
+        **{f"mc_{t}R": best_params_base[t] for t in THRESHOLDS},
+        "reg":  best_params_reg,
+        "meta": best_params_meta
+    },
+    "notes": "Tri-class base classifiers use mapping {-1,0,1}->{0,1,2} internally for LightGBM."
+}
+joblib.dump(metadata, f"{MODEL_DIR}model_metadata.pkl")
+
+# -----------------------------
+# 6) Dump feature importances
+# -----------------------------
+# Base models (full-data)
+for t, model in final_base.items():
+    dump_importance(model, features, f"{MODEL_DIR}feature_importance_base_{t}R.csv", f"Base {t}R")
+
+# Regressor
+reg_feature_names = X_full_reg.columns.tolist()
+dump_importance(reg_final, reg_feature_names, f"{MODEL_DIR}feature_importance_regressor.csv", "Regressor")
+
+# Meta
+meta_feature_names = X_full_meta.columns.tolist()
+dump_importance(meta_final, meta_feature_names, f"{MODEL_DIR}feature_importance_meta.csv", "Meta")
+
+print("\n✅ All models trained, evaluated, and saved.")
+print(f"Artifacts written to: {os.path.abspath(MODEL_DIR)}")

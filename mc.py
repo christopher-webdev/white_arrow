@@ -981,6 +981,9 @@ def load_and_label_data(
                 sl_mult=sl_mult,
                 horizon=horizon
             )
+            # drop all nan here
+            long_trades = long_trades.dropna(how="all").reset_index(drop=True)
+            short_trades = short_trades.dropna(how="all").reset_index(drop=True)
 
             both = pd.concat([long_trades, short_trades], ignore_index=True)
             print(f"✅ {file} → {len(both)} labeled rows")
