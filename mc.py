@@ -646,50 +646,54 @@ def calculate_indicators(df):
     df = df.iloc[300:].reset_index(drop=True)
    
     return df
-# --- TRIPLE-BARRIER FUNCTION WITH RR LABEL ---
-def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon=None, rr_threshold=None):
-    EPS = 1e-9
+# ==== PLUG & PLAY: Multi-threshold triple-barrier (long & short) + metrics + loader ====
+import os
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 
-    # --- Extract pair_code from filename ---
+# -------------------------
+# Helpers / sanity checks
+# -------------------------
+def _ensure_required_columns(df: pd.DataFrame, required_cols):
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise KeyError(f"Missing required columns: {missing}")
+
+# -------------------------
+# LONG: multi-threshold (-1/0/1) labels + rr_label
+# -------------------------
+def apply_triple_barrier_with_long_multi(
+    df: pd.DataFrame,
+    file: str,
+    pt_mult_list=(1.2, 2.2, 3.2),
+    sl_mult: float = 4.0,
+    horizon: int = 50,
+):
+    EPS = 1e-9
     pair_code = os.path.splitext(os.path.basename(file))[0].lower()
+    df = df.copy()
     df['pair'] = pair_code
 
-    spread_limits_low = {
-        
-        "gbpusd": 0.00040,
-        "usdcad": 0.00040,
-        "xauusd": 01.0000,
-        
-       
-       
-    }
-    spread_limits_high = {
-     
-         
-        "gbpusd": 0.00350,
-        "usdcad": 0.00350,
-        "xauusd": 09.0000,
-        
-    }
-    if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
-        raise KeyError(f"No spread limits defined for pair '{pair_code}'")
-    
+    # Required columns
+    _ensure_required_columns(df, ['valid_hour', 'SFP_Up', 'volatility', 'Close', 'High', 'Low'])
 
-    # --- Initialize ---
-    labels = []
+    # Spread guardrails (adjust as needed)
+    spread_limits_low = {"gbpusd": 0.00040, "usdcad": 0.00040, "xauusd": 1.0000}
+    spread_limits_high = {"gbpusd": 0.00350, "usdcad": 0.00350, "xauusd": 9.0000}
+    if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
+        raise KeyError(f"No spread limits for '{pair_code}'")
+
     rr_labels = []
-    entry_prices = []
-    stop_loss_prices = []
-    stop_loss_distances = []
-    sl_ratios = []
-    sides = []
+    y_labels_dict = {f"y_{pt}R": [] for pt in pt_mult_list}
+    entry_prices, stop_loss_prices, stop_loss_distances, sl_ratios, sides = [], [], [], [], []
 
     for i in tqdm(range(len(df)), desc='Sim LONG trades'):
-
-        # Not enough future candles to simulate
+        # Not enough candles ahead
         if i > len(df) - horizon - 1:
-            labels.append(np.nan)
             rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
@@ -697,20 +701,11 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             sides.append(-1)
             continue
 
-        # Must be during valid hour
-        if not df['valid_hour'].iloc[i]:
-            labels.append(np.nan)
+        # Entry filters
+        if not bool(df['valid_hour'].iloc[i]) or not bool(df['SFP_Up'].iloc[i]):
             rr_labels.append(np.nan)
-            entry_prices.append(np.nan)
-            stop_loss_prices.append(np.nan)
-            stop_loss_distances.append(np.nan)
-            sl_ratios.append(np.nan)
-            sides.append(-1)
-            continue
-        
-        if not df['SFP_Up'].iloc[i]:
-            labels.append(np.nan)
-            rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
@@ -720,22 +715,18 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
 
         spread_low = spread_limits_low[pair_code]
         spread_high = spread_limits_high[pair_code]
-        
-        # --- Trade setup ---
-        entry = df['Close'].iloc[i]
-        vol = df['volatility'].iloc[i]
 
-        # Stop Loss (below entry for longs)
+        entry = float(df['Close'].iloc[i])
+        vol = float(df['volatility'].iloc[i])
+
+        # Long: SL below entry, TP above
         sl = entry - sl_mult * vol
-        sl_dist = entry - sl  # Positive distance
+        sl_dist = entry - sl  # > 0
 
-        # Take Profit (above entry)
-        tp = entry + pt_mult * sl_dist
-
-        # Skip if SL distance is outside spread limits
-        if sl_dist < spread_limits_low[pair_code] or sl_dist > spread_limits_high[pair_code]:
-            labels.append(np.nan)
+        if sl_dist < spread_low or sl_dist > spread_high:
             rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
@@ -743,45 +734,51 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             sides.append(-1)
             continue
 
-        
-        # --- Simulate price movement (fix: use Low for SL, High for TP) ---
-        label = 0
-        max_rr = -np.inf  # Track max RR achieved
+        max_rr = -np.inf
+        hit_sl = False
+        hit_tp_dict = {pt: False for pt in pt_mult_list}
 
         for j in range(1, horizon + 1):
             fp_high = float(df['High'].iloc[i + j])
-            fp_low  = float(df['Low'].iloc[i + j])
+            fp_low = float(df['Low'].iloc[i + j])
 
-            # Stop Loss Hit (price drops to SL)
+            # SL hit?
             if fp_low <= sl:
-                rr = -1.0
-                max_rr = max(max_rr, rr)
-                label = -1
+                max_rr = max(max_rr, -1.0)
+                hit_sl = True
                 break
 
-            # Take Profit Hit (price rises to TP)
-            if fp_high >= tp:
-                rr = pt_mult
-                max_rr = max(max_rr, rr)
-                label = 1
-                break
+            # TP checks
+            for pt in pt_mult_list:
+                tp = entry + (pt * sl_dist)
+                if fp_high >= tp:
+                    max_rr = max(max_rr, pt)
+                    hit_tp_dict[pt] = True
 
-            # Neither hit → update max RR (optimistic mark-to-high)
-            rr = (fp_high - entry) / (entry - sl + EPS)
+            # Update max RR (mark-to-high for long)
+            rr = (fp_high - entry) / (sl_dist + EPS)
             max_rr = max(max_rr, rr)
 
-        # Save results
-        labels.append(label)
         rr_labels.append(max_rr)
+
+        # -1/0/1 per threshold
+        for pt in pt_mult_list:
+            if hit_tp_dict[pt]:
+                y_labels_dict[f"y_{pt}R"].append(1)
+            elif hit_sl:
+                y_labels_dict[f"y_{pt}R"].append(-1)
+            else:
+                y_labels_dict[f"y_{pt}R"].append(0)
+
         entry_prices.append(entry)
         stop_loss_prices.append(sl)
         stop_loss_distances.append(sl_dist)
         sl_ratios.append(sl_dist / (entry + EPS))
-        sides.append(1)  # 1 = long trade
+        sides.append(1)  # long
 
-    # --- Assign to DataFrame ---
-    df['label'] = labels
     df['rr_label'] = rr_labels
+    for col, vals in y_labels_dict.items():
+        df[col] = vals
     df['entry_price'] = entry_prices
     df['stop_loss_price'] = stop_loss_prices
     df['stop_loss_distance'] = stop_loss_distances
@@ -789,41 +786,38 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
     df['side'] = sides
 
     return df
-def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizon=None, rr_threshold=None):
-    EPS = 1e-9
 
-    # --- Extract pair_code from filename ---
+# -------------------------
+# SHORT: multi-threshold (-1/0/1) labels + rr_label
+# -------------------------
+def apply_triple_barrier_with_short_multi(
+    df: pd.DataFrame,
+    file: str,
+    pt_mult_list=(1.2, 2.2, 3.2),
+    sl_mult: float = 4.0,
+    horizon: int = 50,
+):
+    EPS = 1e-9
     pair_code = os.path.splitext(os.path.basename(file))[0].lower()
+    df = df.copy()
     df['pair'] = pair_code
 
-    # Mirror long: same instruments & bounds
-    spread_limits_low = {
-        "gbpusd": 0.00040,
-        "usdcad": 0.00040,
-        "xauusd": 01.0000,
-    }
-    spread_limits_high = {
-        "gbpusd": 0.00350,
-        "usdcad": 0.00350,
-        "xauusd": 09.0000,
-    }
-    if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
-        raise KeyError(f"No spread limits defined for pair '{pair_code}'")
+    _ensure_required_columns(df, ['valid_hour', 'SFP_Down', 'volatility', 'Close', 'High', 'Low'])
 
-    labels = []
+    spread_limits_low = {"gbpusd": 0.00040, "usdcad": 0.00040, "xauusd": 1.0000}
+    spread_limits_high = {"gbpusd": 0.00350, "usdcad": 0.00350, "xauusd": 9.0000}
+    if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
+        raise KeyError(f"No spread limits for '{pair_code}'")
+
     rr_labels = []
-    entry_prices = []
-    stop_loss_prices = []
-    stop_loss_distances = []
-    sl_ratios = []
-    sides = []
+    y_labels_dict = {f"y_{pt}R": [] for pt in pt_mult_list}
+    entry_prices, stop_loss_prices, stop_loss_distances, sl_ratios, sides = [], [], [], [], []
 
     for i in tqdm(range(len(df)), desc='Sim SHORT trades'):
-
-        # Not enough future candles to simulate
         if i > len(df) - horizon - 1:
-            labels.append(np.nan)
             rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
@@ -831,23 +825,10 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
             sides.append(-1)
             continue
 
-        # Must be during valid hour
-        if not df['valid_hour'].iloc[i]:
-            labels.append(np.nan)
+        if not bool(df['valid_hour'].iloc[i]) or not bool(df['SFP_Down'].iloc[i]):
             rr_labels.append(np.nan)
-            entry_prices.append(np.nan)
-            stop_loss_prices.append(np.nan)
-            stop_loss_distances.append(np.nan)
-            sl_ratios.append(np.nan)
-            sides.append(-1)
-            continue
-
-        # Mirror of long entry filter (inverse sign/position logic)
-        # Long skipped when: log_ret <= +0.0002 and SMA_200 >= Low
-        # Short skip when:   log_ret >= -0.0002 and SMA_200 <= High
-        if not df['SFP_Down'].iloc[i]:
-            labels.append(np.nan)
-            rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
@@ -858,66 +839,68 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
         spread_low = spread_limits_low[pair_code]
         spread_high = spread_limits_high[pair_code]
 
-        # --- Trade setup ---
-        entry = df['Close'].iloc[i]
-        vol = df['volatility'].iloc[i]
+        entry = float(df['Close'].iloc[i])
+        vol = float(df['volatility'].iloc[i])
 
-        # Stop Loss (above entry for shorts)
+        # Short: SL above entry, TP below
         sl = entry + sl_mult * vol
-        sl_dist = sl - entry  # Positive distance
+        sl_dist = sl - entry  # > 0
 
-        # Take Profit (below entry)
-        tp = entry - pt_mult * sl_dist
-
-        # Skip if SL distance is outside spread limits
         if sl_dist < spread_low or sl_dist > spread_high:
-            labels.append(np.nan)
             rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
             entry_prices.append(np.nan)
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
             sl_ratios.append(np.nan)
-            sides.append(-1)  # mirror long: mark intended side but skip this trade
+            sides.append(-1)
             continue
 
-        # --- Simulate price movement (use High for SL, Low for TP) ---
-        label = 0
-        max_rr = -np.inf  # Track max RR achieved
+        max_rr = -np.inf
+        hit_sl = False
+        hit_tp_dict = {pt: False for pt in pt_mult_list}
 
         for j in range(1, horizon + 1):
             fp_high = float(df['High'].iloc[i + j])
-            fp_low  = float(df['Low'].iloc[i + j])
+            fp_low = float(df['Low'].iloc[i + j])
 
-            # Stop Loss Hit (price rises to SL)
+            # SL hit?
             if fp_high >= sl:
-                rr = -1.0
-                max_rr = max(max_rr, rr)
-                label = -1
+                max_rr = max(max_rr, -1.0)
+                hit_sl = True
                 break
 
-            # Take Profit Hit (price drops to TP)
-            if fp_low <= tp:
-                rr = pt_mult
-                max_rr = max(max_rr, rr)
-                label = 1
-                break
+            # TP checks
+            for pt in pt_mult_list:
+                tp = entry - (pt * sl_dist)
+                if fp_low <= tp:
+                    max_rr = max(max_rr, pt)
+                    hit_tp_dict[pt] = True
 
-            # Neither hit → update max RR (optimistic mark-to-low for shorts)
-            rr = (entry - fp_low) / (sl - entry + EPS)
+            # Update max RR (mark-to-low for short)
+            rr = (entry - fp_low) / (sl_dist + EPS)
             max_rr = max(max_rr, rr)
 
-        # Save results
-        labels.append(label)
         rr_labels.append(max_rr)
+
+        for pt in pt_mult_list:
+            if hit_tp_dict[pt]:
+                y_labels_dict[f"y_{pt}R"].append(1)
+            elif hit_sl:
+                y_labels_dict[f"y_{pt}R"].append(-1)
+            else:
+                y_labels_dict[f"y_{pt}R"].append(0)
+
         entry_prices.append(entry)
         stop_loss_prices.append(sl)
         stop_loss_distances.append(sl_dist)
         sl_ratios.append(sl_dist / (entry + EPS))
-        sides.append(0)  # -1 = short trade
+        sides.append(0)  # short
 
-    # --- Assign to DataFrame ---
-    df['label'] = labels
     df['rr_label'] = rr_labels
+    for col, vals in y_labels_dict.items():
+        df[col] = vals
     df['entry_price'] = entry_prices
     df['stop_loss_price'] = stop_loss_prices
     df['stop_loss_distance'] = stop_loss_distances
@@ -926,131 +909,111 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
 
     return df
 
-
-def label_short_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
-    df = calculate_indicators(df)
-    df = apply_triple_barrier_with_short(df, file, pt_mult, sl_mult, horizon, rr_threshold)
-    df.dropna(subset=['label'], inplace=True)
-    # df['pair'] = df['pair'].astype('category')
-    
-    # df = generate_rr_classification_labels(df)
+# -------------------------
+# Metrics printer (works for any y_*R column)
+# -------------------------
+def print_trade_metrics(df: pd.DataFrame, target_col: str):
     df_valid = df[df['valid_hour']].copy()
-    print(df_valid.head())
-
     if df_valid.empty:
-        print("⚠️ No valid-hour trades found in:", file)
-        return pd.DataFrame()
+        print("⚠️ No valid-hour trades found.")
+        return
 
-    # Label stats
-    label_counts = df_valid['label'].value_counts().sort_index()
-    wins = label_counts.get(1.0, 0)
-    losses = label_counts.get(-1.0, 0)
-    neutrals = label_counts.get(0.0, 0)
-    total_trades = wins + losses  # + neutrals
+    vc = df_valid[target_col].value_counts().sort_index()
+    wins   = int(vc.get(1, 0))
+    losses = int(vc.get(-1, 0))
+    neutrals = int(vc.get(0, 0))
+    total_trades = wins + losses  # excludes neutrals for WR/LR
 
-    win_rate = wins / total_trades * 100 if total_trades else 0
-    loss_rate = losses / total_trades * 100 if total_trades else 0
-    neutral_rate = neutrals / total_trades * 100 if total_trades else 0
+    win_rate = wins / total_trades * 100 if total_trades else 0.0
+    loss_rate = losses / total_trades * 100 if total_trades else 0.0
+    neutral_rate = neutrals / (total_trades + neutrals) * 100 if (total_trades + neutrals) else 0.0
 
-    # Expectancy
-    RR_levels = [1.5]
-    expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1) for rr in RR_levels}
+    RR_levels = [1.5]  # expectancy snapshot
+    expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1.0) for rr in RR_levels}
 
-    # 📊 Print Summary
-    print("\n🔎 Trade Label Distribution (VALID HOURS ONLY):")
-    print(label_counts)
+    print(f"\n🔎 Metrics for {target_col}:")
+    print(vc)
     print(f"\n📈 Win Rate:     {win_rate:.2f}%")
     print(f"📉 Loss Rate:    {loss_rate:.2f}%")
     print(f"⏸️ Neutral Rate: {neutral_rate:.2f}%")
-    print(f"📊 Total Trades: {total_trades}")
+    print(f"📊 Total Trades (W+L): {total_trades}")
 
     print("\n💰 Expectancy by R:R:")
     for rr in RR_levels:
         print(f" - R:R {rr}:1 → Expectancy = {expectancies[rr]:.3f}")
 
-    print(f"\n📈 Max R:R label summary (from 'rr_label'):")
-    print(f" - Max RR:  {df_valid['rr_label'].max():.2f}")
-    print(f" - Mean RR: {df_valid['rr_label'].mean():.2f}")
-    print(f" - Median:  {df_valid['rr_label'].median():.2f}")
+    print("\n📈 rr_label stats:")
+    print(f" - Max:    {pd.to_numeric(df_valid['rr_label'], errors='coerce').max():.3f}")
+    print(f" - Mean:   {pd.to_numeric(df_valid['rr_label'], errors='coerce').mean():.3f}")
+    print(f" - Median: {pd.to_numeric(df_valid['rr_label'], errors='coerce').median():.3f}")
 
-    return df_valid
-
-def label_long_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
-    df = calculate_indicators(df)
-    df = apply_triple_barrier_with_long(df, file, pt_mult, sl_mult, horizon, rr_threshold)
-    df.dropna(subset=['label'], inplace=True)
-    # df['pair'] = df['pair'].astype('category')
-
-    # df = generate_rr_classification_labels(df)
-    df_valid = df[df['valid_hour']].copy()
-
-    print(df_valid.head())
-    if df_valid.empty:
-        print("⚠️ No valid-hour trades found in:", file)
-        return pd.DataFrame()
-
-    # Label stats
-    label_counts = df_valid['label'].value_counts().sort_index()
-    wins = label_counts.get(1.0, 0)
-    losses = label_counts.get(-1.0, 0)
-    neutrals = label_counts.get(0.0, 0)
-    total_trades = wins + losses  # + neutrals
-
-    win_rate = wins / total_trades * 100 if total_trades else 0
-    loss_rate = losses / total_trades * 100 if total_trades else 0
-    neutral_rate = neutrals / total_trades * 100 if total_trades else 0
-
-    # Expectancy
-    RR_levels = [1.5]
-    expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1) for rr in RR_levels}
-
-    # 📊 Print Summary
-    print("\n🔎 Trade Label Distribution (VALID HOURS ONLY):")
-    print(label_counts)
-    print(f"\n📈 Win Rate:     {win_rate:.2f}%")
-    print(f"📉 Loss Rate:    {loss_rate:.2f}%")
-    print(f"⏸️ Neutral Rate: {neutral_rate:.2f}%")
-    print(f"📊 Total Trades: {total_trades}")
-
-    print("\n💰 Expectancy by R:R:")
-    for rr in RR_levels:
-        print(f" - R:R {rr}:1 → Expectancy = {expectancies[rr]:.3f}")
-
-    print(f"\n📈 Max R:R label summary (from 'rr_label'):")
-    print(f" - Max RR:  {df_valid['rr_label'].max():.2f}")
-    print(f" - Mean RR: {df_valid['rr_label'].mean():.2f}")
-    print(f" - Median:  {df_valid['rr_label'].median():.2f}")
-
-    return df_valid
-
-def load_and_label_data(csv_files, save_path="test-combined.csv"):
+# -------------------------
+# Loader / runner: labels both sides, prints metrics, saves combined CSV
+# -------------------------
+def load_and_label_data(
+    csv_files,
+    save_path="test-combined.csv",
+    pt_mult_list=(1.2, 2.2, 3.2),
+    sl_mult=4.0,
+    horizon=50,
+):
     all_trades = []
 
     for file in csv_files:
         print(f"\n📂 Processing {file}")
         try:
-            df = pd.read_csv(file)
-            short_trades = label_short_trades(df.copy(), file, pt_mult=3.0, sl_mult=4, horizon=48, rr_threshold=2)
-         
+            df_raw = pd.read_csv(file)
 
-            long_trades = label_long_trades(df.copy(), file, pt_mult=3.0, sl_mult=4, horizon=48, rr_threshold=2)
+            # If you normally build features here, uncomment:
+            df_raw = calculate_indicators(df_raw)
 
-            both = pd.concat([short_trades, long_trades], ignore_index=True)#short_trades,
-            print(f"✅ {file} → {len(both)} trades labeled")
+            long_trades = apply_triple_barrier_with_long_multi(
+                df=df_raw.copy(),
+                file=file,
+                pt_mult_list=pt_mult_list,
+                sl_mult=sl_mult,
+                horizon=horizon
+            )
+            short_trades = apply_triple_barrier_with_short_multi(
+                df=df_raw.copy(),
+                file=file,
+                pt_mult_list=pt_mult_list,
+                sl_mult=sl_mult,
+                horizon=horizon
+            )
+
+            both = pd.concat([long_trades, short_trades], ignore_index=True)
+            print(f"✅ {file} → {len(both)} labeled rows")
             all_trades.append(both)
 
         except Exception as e:
             print(f"❌ Failed on {file}: {e}")
 
-    if all_trades:
-        combined = pd.concat(all_trades, ignore_index=True)
-        combined.to_csv(save_path, index=False)
-        print(f"\n✅ Final dataset saved: {len(combined)} trades from {len(csv_files)} files")
-        print(combined['rr_label'].describe(), combined['stop_loss_distance'].describe())
-        return combined
-    else:
+    if not all_trades:
         print("⚠️ No trades were collected.")
         return pd.DataFrame()
 
-csv_files = ["gbpusd.csv", "usdcad.csv"] #", "usdcad.csv",,, "eurusd.csv","usdcad.csv"xau.csv", "jpy.csv"
-final_dataset = load_and_label_data(csv_files)
+    combined = pd.concat(all_trades, ignore_index=True)
+
+    # Save combined dataset
+    combined.to_csv(save_path, index=False)
+    print(f"\n✅ Final dataset saved: {len(combined)} rows from {len(csv_files)} files → {save_path}")
+
+    # Print metrics for each threshold
+    for pt in pt_mult_list:
+        col = f"y_{pt}R"
+        if col in combined.columns:
+            print_trade_metrics(combined, col)
+
+    return combined
+
+# --- Example usage ---
+if __name__ == "__main__":
+    csv_files = ["gbpusd.csv", "usdcad.csv"]  # add more as needed
+    final_dataset = load_and_label_data(
+        csv_files,
+        save_path="test-combined.csv",
+        pt_mult_list=(1.2, 2.2, 3.2),
+        sl_mult=4.0,
+        horizon=50
+    )
