@@ -1038,6 +1038,6 @@ if __name__ == "__main__":
         csv_files,
         save_path="test-combined.csv",
         pt_mult_list=(1.2, 2.2, 3.2),
-        sl_mult=4.0,
+        sl_mult=3.0,
         horizon=50
     )

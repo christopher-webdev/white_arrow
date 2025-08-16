@@ -2889,20 +2889,60 @@ def save_prediction_row_async(row_data: pd.Series, symbol: str, base_path: str =
 
 #     # Return single dict or list of dicts
 #     return out[0] if n == 1 else out
+import os
+import joblib
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+from typing import Dict
+
+# ---------- helpers shared with training ----------
+def add_base_probs_features(X: pd.DataFrame, prob_dict: Dict[int, np.ndarray]) -> pd.DataFrame:
+    """
+    prob_dict: {threshold -> (N,3) probs in class order [p(-1), p(0), p(1)]}
+    Adds features:
+      clf_T R_pneg1, clf_T R_p0, clf_T R_p1, clf_T R_ev  (ev = p1 - pneg1)
+    """
+    Xf = X.copy()
+    for t, probs in prob_dict.items():
+        p_neg1 = probs[:, 0]
+        p_0    = probs[:, 1]
+        p_1    = probs[:, 2]
+        Xf[f'clf_{t}R_pneg1'] = p_neg1
+        Xf[f'clf_{t}R_p0']    = p_0
+        Xf[f'clf_{t}R_p1']    = p_1
+        Xf[f'clf_{t}R_ev']    = p_1 - p_neg1
+    return Xf
+
+def build_meta_features(X: pd.DataFrame, prob_dict: Dict[int, np.ndarray], reg_vec: np.ndarray) -> pd.DataFrame:
+    Xf = add_base_probs_features(X, prob_dict)
+    Xf['reg_pred'] = reg_vec
+    return Xf
+
+# Optional: your async logger can remain as in your original code
+def save_prediction_row_async(*args, **kwargs):
+    # stub – keep your original implementation
+    pass
+
+
 def get_predictions(
     features: pd.DataFrame,
     symbol: str,
     trade_type: str = "buy",
     save_csv: bool = False,
-    save_dir: str = "latest_predictions",   # directory to write <SYMBOL>.csv (async)
+    save_dir: str = "latest_predictions",
     max_rows: int = 20000,
-    thresh_meta: float | None = None,       # optional prob gate for meta
-    metadata: dict | None = None            # pass loaded model_metadata.pkl if available
+    thresh_meta: float | None = None,       # optional prob gate on meta
+    metadata: dict | None = None,           # optional preloaded model_metadata.pkl
+    model_dir: str = "./tmodel_artifacts_3xmc_meta_v1/",   # where models/metadata were saved
 ):
     """
-    Full stacked prediction pipeline (multi-threshold):
-      - Base Classifiers (1:1..1:K) -> Regressor -> Meta (0..K)
-      - Returns a dict (single row) or a list of dicts (batch)
+    Full stacked prediction pipeline for the new models:
+      Base Multiclass (−1/0/+1) at thresholds in metadata['thresholds']
+        -> Regressor on rr_label (takes all base probs + EVs)
+        -> Meta 4-class (0=reject,1=1R,2=2R,3=3R) using base probs + reg_pred
+
+    Returns: dict (single row) or list[dict] (batch)
     """
     if not isinstance(features, pd.DataFrame):
         print(f"❌ 'features' must be a DataFrame for {symbol}")
@@ -2911,180 +2951,152 @@ def get_predictions(
         print(f"❌ Invalid trade_type: '{trade_type}'")
         return None
 
-    # ---- Ensure 'pair' dtype matches training (important for LightGBM categorical splits)
+    # ---- Load metadata & models ----
+    if metadata is None:
+        meta_path = os.path.join(model_dir, "model_metadata.pkl")
+        if not os.path.exists(meta_path):
+            print(f"❌ Missing metadata at {meta_path}")
+            return None
+        metadata = joblib.load(meta_path)
+
+    thresholds = metadata.get("thresholds", [1, 2, 3])
+    feature_list = metadata["features"]
+    pair_categories = metadata.get("pair_categories")  # may be absent
+
+    # Base boosters by threshold
+    base_boosters: Dict[int, lgb.Booster] = {}
+    for t in thresholds:
+        pth = os.path.join(model_dir, f"classifier_{t}R.txt")
+        if not os.path.exists(pth):
+            print(f"❌ Missing base classifier file: {pth}")
+            return None
+        base_boosters[t] = lgb.Booster(model_file=pth)
+
+    # Regressor & Meta
+    reg_path  = os.path.join(model_dir, "regressor.txt")
+    meta_path = os.path.join(model_dir, "meta_model.txt")
+    if not os.path.exists(reg_path) or not os.path.exists(meta_path):
+        print("❌ Missing regressor and/or meta model files.")
+        return None
+
+    reg_booster  = lgb.Booster(model_file=reg_path)
+    meta_booster = lgb.Booster(model_file=meta_path)
+
+    # ---- Prepare features (align types/columns) ----
     feats = features.copy()
     if "pair" in feats.columns:
-        if metadata and "pair_categories" in metadata:
-            feats["pair"] = pd.Categorical(feats["pair"], categories=metadata["pair_categories"])
-        else:
-            feats["pair"] = feats["pair"].astype("category")
+        feats["pair"] = feats["pair"].astype("category")
+        if pair_categories:
+            feats["pair"] = feats["pair"].cat.set_categories(pair_categories)
 
     n = len(feats)
+    # restrict to training feature schema; fill missing with 0
+    X_base = feats.reindex(columns=feature_list, fill_value=0)
 
-    # ---- Discover classifier names and model handles
-    # Expected keys in loaded_models (robust to underscore/dot naming):
-    #   - classifiers: "clf_{trade_type}_1.1" OR "clf_{trade_type}_1_1"
-    #   - regressor:   "reg_{trade_type}"
-    #   - meta:        "meta_{trade_type}"
-    #
-    # Preferred list from metadata (e.g., ['1_1','1_2','1_3','1_4','1_5']):
-    if metadata and "classifier_names" in metadata and metadata["classifier_names"]:
-        # Normalize names to underscore form '1_1'
-        cls_names = [str(name).replace(".", "_") for name in metadata["classifier_names"]]
-    else:
-        # Infer from loaded_models keys
-        prefix = f"clf_{trade_type}_"
-        cls_names = []
-        for k in list(loaded_models.keys()):
-            if k.startswith(prefix):
-                suffix = k[len(prefix):]  # e.g., '1.1' or '1_1'
-                cls_names.append(suffix.replace(".", "_"))
-        cls_names = sorted(set(cls_names))  # dedupe + order
+    # ---- 1) Base multiclass probabilities per threshold ----
+    base_probs: Dict[int, np.ndarray] = {}
+    for t in thresholds:
+        # Booster.predict expects same columns order; LightGBM Booster ignores column names,
+        # but we keep X_base consistent with training via metadata['features'].
+        p = base_boosters[t].predict(X_base, raw_score=False)  # (N,3) ordered as classes {0,1,2} i.e. [-1,0,+1]
+        if p.ndim == 1:
+            p = p.reshape(-1, 3)
+        if p.shape != (n, 3):
+            raise RuntimeError(f"Base {t}R returned shape {p.shape}, expected {(n,3)}")
+        base_probs[t] = p
 
-    if not cls_names:
-        print(f"❌ No classifier models found for trade_type='{trade_type}'")
-        return None
-
-    # Helper to fetch a booster by accepting both '1.1' and '1_1' saved-key variants
-    def _get_booster(kind: str, name_under: str):
-        # kind is 'clf', 'reg', or 'meta'
-        if kind == "clf":
-            # Try both underscore/dot variants
-            cand = [
-                f"clf_{trade_type}_{name_under}",               # '1_1'
-                f"clf_{trade_type}_{name_under.replace('_','.')}"  # '1.1'
-            ]
-        elif kind == "reg":
-            cand = [f"reg_{trade_type}"]
-        else:
-            cand = [f"meta_{trade_type}"]
-
-        for ck in cand:
-            if ck in loaded_models:
-                return loaded_models[ck]
-        raise KeyError(f"Missing model for {kind} ({name_under}) -> tried: {cand}")
-
-    # ---- Load boosters
-    try:
-        clf_boosters = {name: _get_booster("clf", name) for name in cls_names}
-        reg_booster  = _get_booster("reg", "reg")
-        meta_booster = _get_booster("meta", "meta")
-    except KeyError as e:
-        print(f"❌ {e}")
-        return None
-
-    # ---- 1) Base classifier probabilities (vectorized for each classifier)
-    clf_probs: dict[str, np.ndarray] = {}
-    for name_u, booster in clf_boosters.items():
-        cols = booster.feature_name()
-        X = feats.reindex(columns=cols, fill_value=0)
-        if X.shape[1] != len(cols):
-            missing = [c for c in cols if c not in X.columns]
-            extra   = [c for c in X.columns if c not in cols]
-            print(f"⚠️ clf_{name_u} feature mismatch. "
-                  f"Expected {len(cols)} got {X.shape[1]}. "
-                  f"Missing: {missing[:5]}... Extra: {extra[:5]}...")
-        p = booster.predict(X)
-        p = np.asarray(p).reshape(-1)
-        if p.shape[0] != n:
-            raise RuntimeError(f"clf_{name_u} produced {p.shape[0]} probs for {n} rows.")
-        # store under a clean feature name: 'clf_1_1_prob'
-        clf_probs[f"clf_{name_u}_prob"] = p
-
-    # ---- 2) Regressor (needs ALL base probs as features)
+    # ---- 2) Regressor prediction (needs base probs + EVs) ----
+    X_reg_all = add_base_probs_features(X_base, base_probs)
+    # Reindex to the regressor's training schema
     reg_cols = reg_booster.feature_name()
-    X_reg = feats.copy()
-    for k, v in clf_probs.items():
-        X_reg[k] = v
-    X_reg = X_reg.reindex(columns=reg_cols, fill_value=0)
+    X_reg = X_reg_all.reindex(columns=reg_cols, fill_value=0)
     rr_pred = reg_booster.predict(X_reg).reshape(-1)
 
-    # ---- 3) Meta (multiclass 0..K)
+    # ---- 3) Meta prediction (base probs + EVs + reg_pred) ----
+    X_meta_all = build_meta_features(X_base, base_probs, rr_pred)
     meta_cols = meta_booster.feature_name()
-    X_meta = feats.copy()
-    for k, v in clf_probs.items():
-        X_meta[k] = v
-    X_meta["reg_pred"] = rr_pred
-    X_meta = X_meta.reindex(columns=meta_cols, fill_value=0)
+    X_meta = X_meta_all.reindex(columns=meta_cols, fill_value=0)
 
-    meta_raw = np.asarray(meta_booster.predict(X_meta))
-    if meta_raw.ndim == 1:  # single row -> (C,)
-        meta_raw = meta_raw.reshape(1, -1)
-    meta_class = meta_raw.argmax(axis=1).astype(int)
-    meta_conf  = meta_raw.max(axis=1)
+    meta_probs = meta_booster.predict(X_meta)  # (N, C=4)
+    if meta_probs.ndim == 1:  # single row
+        meta_probs = meta_probs.reshape(1, -1)
+    meta_class = meta_probs.argmax(axis=1).astype(int)
+    meta_conf  = meta_probs.max(axis=1)
 
-    # ---- Acceptance gating
-    # Class threshold (bucket) from metadata; default to >=2R bin (class >= 2)
-    cls_min = 2
-    if metadata and isinstance(metadata.get("live_meta_min_class"), (int, np.integer)):
-        cls_min = int(metadata["live_meta_min_class"])
-
-    # Prob gate (optional)
+    # ---- Acceptance gating ----
+    # Default to requiring class >= 2 (i.e., target ≥2R). Override via metadata['live_meta_min_class'].
+    cls_min = int(metadata.get("live_meta_min_class", 2))
     if thresh_meta is not None:
+        # if confidence below gate, force reject (class 0)
         meta_class = np.where(meta_conf >= float(thresh_meta), meta_class, 0)
 
     accepted = meta_class >= cls_min
 
-    # ---- 4) Build outputs
+    # ---- Build outputs ----
+    # Collect EVs for convenience
+    ev_cols = [c for c in X_reg_all.columns if c.endswith("_ev")]
+    ev_df = X_reg_all[ev_cols].copy()
+
+    # also collect raw pneg1/p0/p1 per threshold for transparency
+    def _pack_base_probs(i: int) -> dict:
+        d = {}
+        for t in thresholds:
+            d[f"clf_{t}R_pneg1"] = float(base_probs[t][i, 0])
+            d[f"clf_{t}R_p0"]    = float(base_probs[t][i, 1])
+            d[f"clf_{t}R_p1"]    = float(base_probs[t][i, 2])
+            d[f"clf_{t}R_ev"]    = float(base_probs[t][i, 2] - base_probs[t][i, 0])
+        return d
+
     out = []
     for i in range(n):
         row = {
             "symbol": symbol,
             "trade_type": trade_type,
             "accepted": bool(accepted[i]),
-            "final_class": int(meta_class[i]),
-            "class_probabilities": meta_raw[i].tolist(),
-            "classifier_probs": {k: float(v[i]) for k, v in clf_probs.items()},
-            "reg_pred": float(rr_pred[i]),
+            "final_class": int(meta_class[i]),          # 0=reject, 1=1R, 2=2R, 3=3R
             "meta_conf": float(meta_conf[i]),
+            "meta_probabilities": meta_probs[i].tolist(),
+            "reg_pred": float(rr_pred[i]),
+            "base_classifier": _pack_base_probs(i),
         }
+        # include EVs explicitly
+        for c in ev_cols:
+            row[c] = float(ev_df.iloc[i][c])
         out.append(row)
 
     # ---- Console summary (single row)
     if n == 1:
         r = out[0]
-        try:
-            logger_obj = t_logger  # if you have t_logger
-        except NameError:
-            logger_obj = None
-        summary = (
-            f"{'✅' if r['accepted'] else '🔕'} "
-            f"{symbol} {trade_type.upper()} → Class {r['final_class']} | "
-            f"Conf {r['meta_conf']:.2f} | R:R {r['reg_pred']:.2f} | "
-        )
-        # append a couple of key probs if present
-        any_two = list(r["classifier_probs"].items())[:5]
-        for k, val in any_two:
-            summary += f"{k}:{val:.2f} "
-        if logger_obj is not None:
-            logger_obj.info(summary.strip())
-        else:
-            print(summary.strip())
+        print((
+            f"{'✅' if r['accepted'] else '🔕'} {symbol} {trade_type.upper()} → "
+            f"MetaClass {r['final_class']} | Conf {r['meta_conf']:.2f} | "
+            f"RR {r['reg_pred']:.2f} | "
+            + " ".join([f"{k}:{v:.2f}" for k, v in list(r['base_classifier'].items())[:4]])
+        ).strip())
 
-    # ---- 5) Optional async CSV logging (per-symbol file, newest on top)
+    # ---- Optional per-symbol CSV logging
     if save_csv:
-        # For each prediction, compose a single Series merging original features + predictions
+        os.makedirs(save_dir, exist_ok=True)
         for i in range(n):
-            base = feats.iloc[i].copy()
-            base["timestamp"] = pd.Timestamp.utcnow()
-            base["symbol"] = symbol
-            base["trade_type"] = trade_type
-            # attach classifier probs
-            for k, v in clf_probs.items():
-                base[k] = v[i]
+            base_row = feats.iloc[i].copy()
+            base_row["timestamp"] = pd.Timestamp.utcnow()
+            base_row["symbol"] = symbol
+            base_row["trade_type"] = trade_type
+            # attach base probs
+            for k, v in out[i]["base_classifier"].items():
+                base_row[k] = v
             # attach reg/meta
-            base["reg_pred"]   = rr_pred[i]
-            base["meta_conf"]  = meta_conf[i]
-            base["meta_class"] = int(meta_class[i])
-            base["accepted"]   = bool(accepted[i])
-            # async save (one file per symbol in save_dir)
+            base_row["reg_pred"]   = out[i]["reg_pred"]
+            base_row["meta_conf"]  = out[i]["meta_conf"]
+            base_row["meta_class"] = out[i]["final_class"]
+            base_row["accepted"]   = out[i]["accepted"]
             try:
-                save_prediction_row_async(base, symbol=symbol, base_path=save_dir, max_rows=max_rows)
+                save_prediction_row_async(base_row, symbol=symbol, base_path=save_dir, max_rows=max_rows)
             except Exception as e:
                 print(f"⚠️ Async CSV logging failed for {symbol}: {e}")
 
-    # ---- Return single dict or list of dicts
     return out[0] if n == 1 else out
+
 
 import joblib
 # === CONFIG ===
