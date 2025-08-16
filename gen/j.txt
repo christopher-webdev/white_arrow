@@ -1,109 +1,209 @@
 
-=== BINARY 1:1 ===
-ROC AUC: 0.9603794633081411
-Accuracy: 0.889935132872986
-F1: 0.8871728871728872
-[[2185  241]
- [ 285 2068]]
+=== BINARY CLASSIFIERS (Holdout) ===
+
+-- 1_1 (y_ge_1R) --
+ROC AUC: 0.9791661573938267
+Accuracy: 0.9079212916246215
+F1: 0.9120269944564955
+[[1707  309]
+ [  56 1892]]
               precision    recall  f1-score   support
 
-         <1R       0.88      0.90      0.89      2426
-        >=1R       0.90      0.88      0.89      2353
+        <thr     0.9682    0.8467    0.9034      2016
+       >=thr     0.8596    0.9713    0.9120      1948
 
-    accuracy                           0.89      4779
-   macro avg       0.89      0.89      0.89      4779
-weighted avg       0.89      0.89      0.89      4779
+    accuracy                         0.9079      3964
+   macro avg     0.9139    0.9090    0.9077      3964
+weighted avg     0.9149    0.9079    0.9076      3964
 
 
-=== BINARY 1:2 ===
-ROC AUC: 0.9913274401160637
-Accuracy: 0.9765641347562252
-F1: 0.9660400242571255
-[[3074   41]
- [  71 1593]]
+-- 1_2 (y_ge_2R) --
+ROC AUC: 0.9870713595275729
+Accuracy: 0.9672048435923309
+F1: 0.9510542168674698
+[[2571   64]
+ [  66 1263]]
               precision    recall  f1-score   support
 
-         <2R       0.98      0.99      0.98      3115
-        >=2R       0.97      0.96      0.97      1664
+        <thr     0.9750    0.9757    0.9753      2635
+       >=thr     0.9518    0.9503    0.9511      1329
 
-    accuracy                           0.98      4779
-   macro avg       0.98      0.97      0.97      4779
-weighted avg       0.98      0.98      0.98      4779
+    accuracy                         0.9672      3964
+   macro avg     0.9634    0.9630    0.9632      3964
+weighted avg     0.9672    0.9672    0.9672      3964
+
+
+-- 1_3 (y_ge_3R) --
+ROC AUC: 0.9900605758637906
+Accuracy: 0.9719979818365287
+F1: 0.9430477167778348
+[[2934   43]
+ [  68  919]]
+              precision    recall  f1-score   support
+
+        <thr     0.9773    0.9856    0.9814      2977
+       >=thr     0.9553    0.9311    0.9430       987
+
+    accuracy                         0.9720      3964
+   macro avg     0.9663    0.9583    0.9622      3964
+weighted avg     0.9719    0.9720    0.9719      3964
+
+
+-- 1_4 (y_ge_4R) --
+ROC AUC: 0.9940153491818065
+Accuracy: 0.981079717457114
+F1: 0.9502982107355865
+[[3172   12]
+ [  63  717]]
+              precision    recall  f1-score   support
+
+        <thr     0.9805    0.9962    0.9883      3184
+       >=thr     0.9835    0.9192    0.9503       780
+
+    accuracy                         0.9811      3964
+   macro avg     0.9820    0.9577    0.9693      3964
+weighted avg     0.9811    0.9811    0.9808      3964
+
+
+-- 1_5 (y_ge_5R) --
+ROC AUC: 0.9962166532815411
+Accuracy: 0.981079717457114
+F1: 0.9403341288782816
+[[3298    0]
+ [  75  591]]
+              precision    recall  f1-score   support
+
+        <thr     0.9778    1.0000    0.9888      3298
+       >=thr     1.0000    0.8874    0.9403       666
+
+    accuracy                         0.9811      3964
+   macro avg     0.9889    0.9437    0.9645      3964
+weighted avg     0.9815    0.9811    0.9806      3964
 
 
 === REGRESSOR (rr_label) ===
-MAE: 0.20690354686068974
-RMSE: 0.34654872418163185
-R2: 0.8103771749063848
+MAE: 0.4165406223522574
+RMSE: 0.6873673029621996
+R2: 0.8905668408096452
 
-=== META (0=Reject,1=1:1,2=1:2) ===
+=== META (0=<1R, 1=1..2R, 2=2..3R, 3=3..4R, 4=4..5R, 5=>=5R) ===
               precision    recall  f1-score   support
 
-      Reject     0.9498    0.9666    0.9581      2426
-         1:1     0.9337    0.9405    0.9371       689
-         1:2     0.9697    0.9417    0.9555      1664
+     class_0     0.9686    0.9643    0.9664      2016
+     class_1     0.8850    0.8950    0.8900       619
+     class_2     0.8837    0.8889    0.8863       342
+     class_3     0.9529    0.8792    0.9146       207
+     class_4     0.9505    0.8421    0.8930       114
+     class_5     0.9295    0.9700    0.9493       666
 
-    accuracy                         0.9542      4779
-   macro avg     0.9511    0.9496    0.9502      4779
-weighted avg     0.9544    0.9542    0.9542      4779
+    accuracy                         0.9400      3964
+   macro avg     0.9284    0.9066    0.9166      3964
+weighted avg     0.9403    0.9400    0.9399      3964
 
-[[2345   38   43]
- [  35  648    6]
- [  89    8 1567]]
+[[1944   41    9    4    0   18]
+ [  30  554   17    0    2   16]
+ [  18   17  304    3    0    0]
+ [   2    8    6  182    3    6]
+ [   1    0    8    0   96    9]
+ [  12    6    0    2    0  646]]
 
 Training final models on ALL data...
+Fitting final base classifier 1_1 ...
+Fitting final base classifier 1_2 ...
+Fitting final base classifier 1_3 ...
+Fitting final base classifier 1_4 ...
+Fitting final base classifier 1_5 ...
 
 ✅ All models trained and saved successfully!
-Classifier 1:1 top10:
-                    Feature  Importance
-251        stop_loss_price        2175
-93                     OBV        1265
-151          MACD_Std_1day        1151
-254                   side        1013
-150           RSI_Std_1day         930
-149         MACD_Mean_1day         865
-45    SMA_200_pct_distance         859
-148          RSI_Mean_1day         787
-61   rsi_above_65_duration         726
-89                     adx         702 
+Classifier 1_1 top10:
+                   Feature  Importance
+191           price_slope         590
+58              rsi_slope         581
+48   SMA_200_pct_distance         432
+117            OC_ratio_1         299
+68              cci_slope         274
+96                    OBV         273
+57             rsi_change         255
+198          acceleration         249
+92                    adx         227
+187           kurtosis_20         216 
 
-Classifier 1:2 top10:
+Classifier 1_2 top10:
                     Feature  Importance
-251        stop_loss_price        1596
-254                   side         594
-93                     OBV         558
-151          MACD_Std_1day         446
-150           RSI_Std_1day         402
-148          RSI_Mean_1day         364
-149         MACD_Mean_1day         360
-45    SMA_200_pct_distance         323
-44                 SMA_200         302
-61   rsi_above_65_duration         295 
+191            price_slope         875
+48    SMA_200_pct_distance         763
+96                     OBV         681
+58               rsi_slope         629
+186            skewness_20         545
+190            kurtosis_10         529
+187            kurtosis_20         523
+92                     adx         476
+64   rsi_above_65_duration         467
+39    SMA_100_pct_distance         414 
+
+Classifier 1_3 top10:
+                    Feature  Importance
+191            price_slope        1335
+96                     OBV        1306
+48    SMA_200_pct_distance        1042
+186            skewness_20         858
+58               rsi_slope         817
+187            kurtosis_20         750
+92                     adx         741
+94        adx_slope_std_10         697
+64   rsi_above_65_duration         618
+51      SMA_200_slope_grad         588 
+
+Classifier 1_4 top10:
+                    Feature  Importance
+96                     OBV         831
+191            price_slope         770
+48    SMA_200_pct_distance         656
+186            skewness_20         531
+64   rsi_above_65_duration         507
+187            kurtosis_20         499
+92                     adx         483
+58               rsi_slope         426
+189            skewness_10         423
+190            kurtosis_10         411 
+
+Classifier 1_5 top10:
+                    Feature  Importance
+96                     OBV        1669
+48    SMA_200_pct_distance        1274
+191            price_slope        1256
+186            skewness_20        1032
+187            kurtosis_20         910
+247     stop_loss_distance         903
+64   rsi_above_65_duration         892
+58               rsi_slope         892
+92                     adx         855
+49     SMA_200_slope_diff5         810 
 
 Regressor top10:
-                   Feature  Importance
-257          clf_1_1_prob        1986
-258          clf_1_2_prob        1705
-151         MACD_Std_1day         378
-55              rsi_slope         359
-93                    OBV         351
-251       stop_loss_price         325
-194           price_slope         310
-45   SMA_200_pct_distance         291
-150          RSI_Std_1day         245
-190           kurtosis_20         238 
+           Feature  Importance
+252  clf_1_1_prob        1615
+253  clf_1_2_prob         746
+254  clf_1_3_prob         710
+256  clf_1_5_prob         707
+255  clf_1_4_prob         623
+129      volume_z         580
+130  volume_slope         570
+184      kurtosis         566
+183      skewness         550
+187   kurtosis_20         546 
 
 Meta top10:
-               Feature  Importance
-259          reg_pred        1203
-257      clf_1_1_prob        1038
-258      clf_1_2_prob         681
-251   stop_loss_price         210
-151     MACD_Std_1day         121
-56    rsi_slope_std_5         109
-54         rsi_change          95
-90          adx_slope          91
-172       range_spike          88
-57   rsi_slope_std_10          85 
+                 Feature  Importance
+257            reg_pred        3863
+254        clf_1_3_prob        1776
+253        clf_1_2_prob        1667
+252        clf_1_1_prob        1435
+255        clf_1_4_prob        1415
+256        clf_1_5_prob        1119
+96                  OBV         298
+247  stop_loss_distance         240
+187         kurtosis_20         216
+70     cci_slope_std_10         184 
 
-(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$ 
+(venv) chris-nwok@DESKTOP-I7CL505:~/white_arrow$  

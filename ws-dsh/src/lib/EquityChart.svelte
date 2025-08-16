@@ -57,6 +57,7 @@
   {#if stats.pts.length > 1}
     <svg
       viewBox={`0 0 ${W} ${H}`} class="w-full h-80"
+      role="img"
       on:mousemove={onMove} on:mouseleave={onLeave}
     >
       <defs>

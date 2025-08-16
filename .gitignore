@@ -8,3 +8,5 @@
 /venv
 /csv
 /node_modules
+# Allow this specific one
+!test-combined.csv

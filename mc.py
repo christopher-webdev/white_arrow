@@ -9,18 +9,17 @@ warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 # Load CSV
 # df = pd.read_csv('ggt.csv')
 def calculate_indicators(df):
-    # Parse datetime column (adjust name if needed)
     df['Time'] = pd.to_datetime(df['Time'], format='%H:%M:%S')
     df['hour'] = df['Time'].dt.hour
 
     df['hour_sin'] = np.sin(2*np.pi * df['hour'] / 24)
     df['hour_cos'] = np.cos(2*np.pi * df['hour'] / 24)
 
-    # df['is_tokyo_session']    = ((df['hour'] >=  2) & (df['hour'] <  9)).astype(int)
-    # df['is_london_session']   = ((df['hour'] >=  8) & (df['hour'] < 17)).astype(int)
-    # df['is_new_york_session'] = ((df['hour'] >= 16) & (df['hour'] < 22)).astype(int)
-    df['valid_hour'] = df['hour'].between(2, 18)
-    df.drop(columns=['Time', 'hour'], inplace=True)
+    df['is_tokyo_session']    = ((df['hour'] >=  2) & (df['hour'] <  9)).astype(int)
+    df['is_london_session']   = ((df['hour'] >=  8) & (df['hour'] < 17)).astype(int)
+    df['is_new_york_session'] = ((df['hour'] >= 16) & (df['hour'] < 22)).astype(int)
+    df['valid_hour'] = df['hour'].between(2, 20)
+    df.drop(columns=['Time', 'hour',], inplace=True)
 
     # df.drop(columns=['Volume'], inplace=True)
     # Basic OHLC columns
@@ -218,7 +217,7 @@ def calculate_indicators(df):
     df['volume_slope'] = np.gradient(df['Volume'].fillna(0))
 
 
-    timeframes = {'15min': 3, '1hr': 12, '4hr': 48, '1day': 288}
+    timeframes = {'15min': 3,  '30hr': 6, '1hr': 12}
     def calculate_slope(series, lag):
         return (series - series.shift(lag)) / lag
 
@@ -250,24 +249,24 @@ def calculate_indicators(df):
 
         EPS = 1e-9
 
-        df['candle_body'] = (df['Close'] - df['Open']).abs()
-        df['upper_wick'] = df['High'] - df[['Close', 'Open']].max(axis=1)
-        df['lower_wick'] = df[['Close', 'Open']].min(axis=1) - df['Low']
-        df['candle_range'] = df['High'] - df['Low']
+    df['candle_body'] = (df['Close'] - df['Open']).abs()
+    df['upper_wick'] = df['High'] - df[['Close', 'Open']].max(axis=1)
+    df['lower_wick'] = df[['Close', 'Open']].min(axis=1) - df['Low']
+    df['candle_range'] = df['High'] - df['Low']
 
-        df['bull_count'] = (df['Close'] > df['Open']).rolling(3).sum()
-        df['bear_count'] = (df['Close'] < df['Open']).rolling(3).sum()
-        df['momentum_unbalance'] = df['bull_count'] - df['bear_count']
-        df.drop(columns=['bull_count', 'bear_count'], inplace=True)
+    df['bull_count'] = (df['Close'] > df['Open']).rolling(2).sum()
+    df['bear_count'] = (df['Close'] < df['Open']).rolling(2).sum()
+    df['momentum_unbalance'] = df['bull_count'] - df['bear_count']
+    df.drop(columns=['bull_count', 'bear_count'], inplace=True)
 
-        df['mean_close_10']  = df['Close'].rolling(10).mean()
-        df['wick_dominance'] = (df['upper_wick'] + df['lower_wick']) / (df['candle_body'] + EPS)
-        df['range_spike'] = df['candle_range'] / df['candle_range'].rolling(20).mean()
-        df['price_surge'] = (df['Close'] - df['mean_close_10']) / df['candle_range'].rolling(10).mean()
-        
-        df.drop(columns=['mean_close_10'], inplace=True)
+    df['mean_close_10']  = df['Close'].rolling(10).mean()
+    df['wick_dominance'] = (df['upper_wick'] + df['lower_wick']) / (df['candle_body'] + EPS)
+    df['range_spike'] = df['candle_range'] / df['candle_range'].rolling(2).mean()
+    df['price_surge'] = (df['Close'] - df['mean_close_10']) / df['candle_range'].rolling(10).mean()
+    
+    df.drop(columns=['mean_close_10'], inplace=True)
 
-        df['PGI_alt'] = 2.0 * df['momentum_unbalance'].fillna(0) + 1.5 * df['range_spike'].fillna(0) + 1.2 * df['wick_dominance'].fillna(0) + 2.5 * df['price_surge'].fillna(0)
+    df['PGI_alt'] = 2.0 * df['momentum_unbalance'].fillna(0) + 1.5 * df['range_spike'].fillna(0) + 1.2 * df['wick_dominance'].fillna(0) + 2.5 * df['price_surge'].fillna(0)
 
     # ────────────── STATISTICAL FEATURE ENGINE ──────────────
     # Price Distribution
@@ -492,7 +491,7 @@ def calculate_indicators(df):
         df['Candles_Since_BB_Lower'] = last_touch_lower
         return df
 
-    def label_choch_from_bos(df, lookback=100):
+    def label_choch_from_bos(df, lookback=24):
         """
         Marks the first opposite-direction break as CHoCH.
         Requires df['BoS_Up'] and df['BoS_Down'] (0/1) already computed.
@@ -615,47 +614,14 @@ def calculate_indicators(df):
         df['FVG_Down'] = bear_fvg.fillna(False).astype(int)
         return df
 
-    def detect_break_retest(df, lookahead=12, tol_atr_mult=0.25):
-        """
-        After a BOS, mark a retest of the breakout level within 'lookahead' bars.
-        Requires df['BoS_Up'] / df['BoS_Down'] (0/1).
-        """
-        atr = _atr(df).ffill()
-        ret_up = np.zeros(len(df), dtype=int)
-        ret_dn = np.zeros(len(df), dtype=int)
-
-        # breakout levels: last swing that was broken
-        last_high = df['High'].cummax()  # simple proxy; replace with stored swing if you have it
-        last_low  = (-df['Low']).cummax() * -1
-
-        for i in range(len(df)):
-            if df['BoS_Up'].iloc[i] == 1:
-                level = last_high.iloc[i]
-                tol = float(tol_atr_mult * atr.iloc[i])
-                hi = min(len(df), i + lookahead + 1)
-                # retest if price trades back to level +/- tol
-                if (df['Low'].iloc[i+1:hi] <= level + tol).any():
-                    ret_up[i] = 1
-
-            if df['BoS_Down'].iloc[i] == 1:
-                level = last_low.iloc[i]
-                tol = float(tol_atr_mult * atr.iloc[i])
-                hi = min(len(df), i + lookahead + 1)
-                if (df['High'].iloc[i+1:hi] >= level - tol).any():
-                    ret_dn[i] = 1
-
-        df['Retest_Up'] = ret_up
-        df['Retest_Down'] = ret_dn
-        return df
 
     df = detect_bos(df, lookback=60, swing_k=2, min_break_atr=0.25, confirm_with_close=True)
     df = detect_double_top_bottom(df, distance=18, tol_atr_mult=0.25, min_sep_bars=12)
     df = candles_since_bollinger_touch(df)
     df = label_choch_from_bos(df, lookback=100)
     df = label_hh_hl_lh_ll(df, k=2)
-    df = detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True)
+    df = detect_sfp(df, k=9, tol_atr_mult=0.02, confirm_with_close=True)
     df = detect_fvg(df, min_atr_mult=0.1)
-    df = detect_break_retest(df, lookahead=12, tol_atr_mult=0.25)
 
 
     df['entry_price']        = 0.0
@@ -680,8 +646,6 @@ def calculate_indicators(df):
     df = df.iloc[300:].reset_index(drop=True)
    
     return df
-
-
 # --- TRIPLE-BARRIER FUNCTION WITH RR LABEL ---
 def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon=None, rr_threshold=None):
     EPS = 1e-9
@@ -692,8 +656,8 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
 
     spread_limits_low = {
         
-        "gbpusd": 0.00050,
-        "usdcad": 0.00050,
+        "gbpusd": 0.00040,
+        "usdcad": 0.00040,
         "xauusd": 01.0000,
         
        
@@ -744,7 +708,7 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             sides.append(-1)
             continue
         
-        if df['log_returns'].iloc[i] <= 0.0002 and  df['SMA_200'].iloc[i] >=  df['Low'].iloc[i]:
+        if not df['SFP_Up'].iloc[i]:
             labels.append(np.nan)
             rr_labels.append(np.nan)
             entry_prices.append(np.nan)
@@ -776,7 +740,7 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
             stop_loss_prices.append(np.nan)
             stop_loss_distances.append(np.nan)
             sl_ratios.append(np.nan)
-            sides.append(1)
+            sides.append(-1)
             continue
 
         
@@ -825,7 +789,6 @@ def apply_triple_barrier_with_long(df, file, pt_mult=None, sl_mult=None, horizon
     df['side'] = sides
 
     return df
-
 def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizon=None, rr_threshold=None):
     EPS = 1e-9
 
@@ -835,8 +798,8 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
 
     # Mirror long: same instruments & bounds
     spread_limits_low = {
-        "gbpusd": 0.00050,
-        "usdcad": 0.00050,
+        "gbpusd": 0.00040,
+        "usdcad": 0.00040,
         "xauusd": 01.0000,
     }
     spread_limits_high = {
@@ -879,7 +842,10 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
             sides.append(-1)
             continue
 
-        if df['log_returns'].iloc[i] >= -0.0002 and df['SMA_200'].iloc[i] <= df['High'].iloc[i]:
+        # Mirror of long entry filter (inverse sign/position logic)
+        # Long skipped when: log_ret <= +0.0002 and SMA_200 >= Low
+        # Short skip when:   log_ret >= -0.0002 and SMA_200 <= High
+        if not df['SFP_Down'].iloc[i]:
             labels.append(np.nan)
             rr_labels.append(np.nan)
             entry_prices.append(np.nan)
@@ -947,7 +913,7 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
         stop_loss_prices.append(sl)
         stop_loss_distances.append(sl_dist)
         sl_ratios.append(sl_dist / (entry + EPS))
-        sides.append(0)  # 0 = short trade
+        sides.append(0)  # -1 = short trade
 
     # --- Assign to DataFrame ---
     df['label'] = labels
@@ -959,29 +925,6 @@ def apply_triple_barrier_with_short(df, file, pt_mult=None, sl_mult=None, horizo
     df['side'] = sides
 
     return df
-
-
-# def generate_rr_classification_labels(df):
-#     df['label_rr_1.0'] = (df['rr_label'] >= 1.1).astype(int)
-#     df['label_rr_2.0'] = (df['rr_label'] >= 2.0).astype(int)
-#     # df['label_rr_3.0'] = (df['rr_label'] >= 3.0).astype(int)
-#     return df
-# def generate_rr_classification_labels(df, thr1=1.0, thr2=2.0):
-#     """
-#     Creates:
-#       - y_ge_1R, y_ge_2R (binary, overlapping: multi-label style)
-#       - y_meta (exclusive multiclass: 0=<1R, 1=1–<2R, 2=≥2R)
-#     """
-#     rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
-
-#     # Multi-label thresholds (overlapping)
-#     df['y_ge_1R'] = (rr >= thr1).astype('int8')
-#     df['y_ge_2R'] = (rr >= thr2).astype('int8')
-
-#     # Exclusive multiclass
-#     df['y_meta'] = np.where(rr >= thr2, 2,
-#                      np.where(rr >= thr1, 1, 0)).astype('int8')
-#     return df
 
 
 def label_short_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
@@ -1010,7 +953,7 @@ def label_short_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
     neutral_rate = neutrals / total_trades * 100 if total_trades else 0
 
     # Expectancy
-    RR_levels = [2]
+    RR_levels = [1.5]
     expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1) for rr in RR_levels}
 
     # 📊 Print Summary
@@ -1058,7 +1001,7 @@ def label_long_trades(df, file, pt_mult, sl_mult, horizon, rr_threshold=2):
     neutral_rate = neutrals / total_trades * 100 if total_trades else 0
 
     # Expectancy
-    RR_levels = [1]
+    RR_levels = [1.5]
     expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1) for rr in RR_levels}
 
     # 📊 Print Summary
@@ -1087,9 +1030,10 @@ def load_and_label_data(csv_files, save_path="test-combined.csv"):
         print(f"\n📂 Processing {file}")
         try:
             df = pd.read_csv(file)
-            short_trades = label_short_trades(df.copy(), file, pt_mult=2.0, sl_mult=6, horizon=100, rr_threshold=2)
+            short_trades = label_short_trades(df.copy(), file, pt_mult=3.0, sl_mult=4, horizon=48, rr_threshold=2)
          
-            long_trades = label_long_trades(df.copy(), file, pt_mult=2.0, sl_mult=6, horizon=100, rr_threshold=2)
+
+            long_trades = label_long_trades(df.copy(), file, pt_mult=3.0, sl_mult=4, horizon=48, rr_threshold=2)
 
             both = pd.concat([short_trades, long_trades], ignore_index=True)#short_trades,
             print(f"✅ {file} → {len(both)} trades labeled")
@@ -1102,11 +1046,11 @@ def load_and_label_data(csv_files, save_path="test-combined.csv"):
         combined = pd.concat(all_trades, ignore_index=True)
         combined.to_csv(save_path, index=False)
         print(f"\n✅ Final dataset saved: {len(combined)} trades from {len(csv_files)} files")
-        print(combined['rr_label'].describe())
+        print(combined['rr_label'].describe(), combined['stop_loss_distance'].describe())
         return combined
     else:
         print("⚠️ No trades were collected.")
         return pd.DataFrame()
 
-csv_files = ["gbpusd.csv","usdcad.csv" ] #" "usdcad.csv",,, "eurusd.csv","usdcad.csv"xau.csv", "jpy.csv"
+csv_files = ["gbpusd.csv", "usdcad.csv"] #", "usdcad.csv",,, "eurusd.csv","usdcad.csv"xau.csv", "jpy.csv"
 final_dataset = load_and_label_data(csv_files)
