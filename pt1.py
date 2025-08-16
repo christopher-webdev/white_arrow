@@ -31,9 +31,9 @@ MODEL_DIR = "./tmodel_artifacts_3xmc_meta_v1/"
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 RANDOM_STATE = 42
-N_TRIALS_BASE = 40
-N_TRIALS_REG  = 40
-N_TRIALS_META = 40
+N_TRIALS_BASE = 3
+N_TRIALS_REG  = 3
+N_TRIALS_META = 3
 N_SPLITS_OOF  = 3
 N_SPLITS_CV   = 3
 

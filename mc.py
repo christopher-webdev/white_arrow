@@ -561,7 +561,7 @@ def calculate_indicators(df):
         df.loc[swings.index, ['HH','HL','LH','LL']] = swings[['HH','HL','LH','LL']].values
         return df
 
-    def detect_sfp(df, k=2, tol_atr_mult=0.2, confirm_with_close=True):
+    def detect_sfp(df, k=9, tol_atr_mult=0.02, confirm_with_close=True):
         """
         SFP_Up: takes out previous swing high by wick, closes back below (uptrap).
         SFP_Down: takes out previous swing low, closes back above (downtrap).
@@ -620,7 +620,7 @@ def calculate_indicators(df):
     df = candles_since_bollinger_touch(df)
     df = label_choch_from_bos(df, lookback=100)
     df = label_hh_hl_lh_ll(df, k=2)
-    df = detect_sfp(df, k=9, tol_atr_mult=0.02, confirm_with_close=True)
+    df = detect_sfp(df, k=9, tol_atr_mult=0.002, confirm_with_close=True)
     df = detect_fvg(df, min_atr_mult=0.1)
 
 
@@ -633,14 +633,6 @@ def calculate_indicators(df):
     vol_window = 15
     df['volatility'] = df['log_returns'].rolling(vol_window).std()
 
-
-    # Drop rows with NaNs in critical columns
-    # df = df.dropna(subset=ohlc_cols)
-
-    # # Compute volatility (rolling standard deviation of returns)
-    
-    # # Drop initial NaNs
-    # df.dropna(inplace=True)
 
     # df = df.dropna().reset_index(drop=True)
     df = df.iloc[300:].reset_index(drop=True)
@@ -679,8 +671,8 @@ def apply_triple_barrier_with_long_multi(
     _ensure_required_columns(df, ['valid_hour', 'SFP_Up', 'volatility', 'Close', 'High', 'Low'])
 
     # Spread guardrails (adjust as needed)
-    spread_limits_low = {"gbpusd": 0.00040, "usdcad": 0.00040, "xauusd": 1.0000}
-    spread_limits_high = {"gbpusd": 0.00350, "usdcad": 0.00350, "xauusd": 9.0000}
+    spread_limits_low = {"gbpusd": 0.00040, "usdcad": 0.00040,}
+    spread_limits_high = {"gbpusd": 0.00150, "usdcad": 0.00150, }
     if pair_code not in spread_limits_low or pair_code not in spread_limits_high:
         raise KeyError(f"No spread limits for '{pair_code}'")
 
@@ -700,9 +692,21 @@ def apply_triple_barrier_with_long_multi(
             sl_ratios.append(np.nan)
             sides.append(-1)
             continue
+             # Entry filters
+       
+        if not  bool(df['valid_hour'].iloc[i]):
+            rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
+            entry_prices.append(np.nan)
+            stop_loss_prices.append(np.nan)
+            stop_loss_distances.append(np.nan)
+            sl_ratios.append(np.nan)
+            sides.append(-1)
+            continue
 
         # Entry filters
-        if not bool(df['valid_hour'].iloc[i]) and not bool(df['SFP_Up'].iloc[i]):
+        if not  (df['SFP_Up'].iloc[i]): #(df['valid_hour'].iloc[i]) and not
             rr_labels.append(np.nan)
             for pt in pt_mult_list:
                 y_labels_dict[f"y_{pt}R"].append(np.nan)
@@ -759,7 +763,7 @@ def apply_triple_barrier_with_long_multi(
             rr = (fp_high - entry) / (sl_dist + EPS)
             max_rr = max(max_rr, rr)
 
-        rr_labels.append(max_rr)
+        rr_labels.append(min(max_rr, 4.0))
 
         # -1/0/1 per threshold
         for pt in pt_mult_list:
@@ -825,7 +829,17 @@ def apply_triple_barrier_with_short_multi(
             sides.append(-1)
             continue
 
-        if not bool(df['valid_hour'].iloc[i]) and not bool(df['SFP_Down'].iloc[i]):
+        if not bool(df['valid_hour'].iloc[i]):
+            rr_labels.append(np.nan)
+            for pt in pt_mult_list:
+                y_labels_dict[f"y_{pt}R"].append(np.nan)
+            entry_prices.append(np.nan)
+            stop_loss_prices.append(np.nan)
+            stop_loss_distances.append(np.nan)
+            sl_ratios.append(np.nan)
+            sides.append(-1)
+            continue
+        if not (df['SFP_Down'].iloc[i]):
             rr_labels.append(np.nan)
             for pt in pt_mult_list:
                 y_labels_dict[f"y_{pt}R"].append(np.nan)
@@ -882,7 +896,7 @@ def apply_triple_barrier_with_short_multi(
             rr = (entry - fp_low) / (sl_dist + EPS)
             max_rr = max(max_rr, rr)
 
-        rr_labels.append(max_rr)
+        rr_labels.append(min(max_rr, 4.0))
 
         for pt in pt_mult_list:
             if hit_tp_dict[pt]:
@@ -928,7 +942,7 @@ def print_trade_metrics(df: pd.DataFrame, target_col: str):
     loss_rate = losses / total_trades * 100 if total_trades else 0.0
     neutral_rate = neutrals / (total_trades + neutrals) * 100 if (total_trades + neutrals) else 0.0
 
-    RR_levels = [1.5]  # expectancy snapshot
+    RR_levels = [1.0,2.0,3.0]  # expectancy snapshot
     expectancies = {rr: (win_rate / 100 * rr) - (loss_rate / 100 * 1.0) for rr in RR_levels}
 
     print(f"\n🔎 Metrics for {target_col}:")
@@ -983,7 +997,10 @@ def load_and_label_data(
             )
             # drop all nan here
             long_trades = long_trades.dropna(how="all").reset_index(drop=True)
+            long_trades = long_trades[long_trades['side'] != -1]
+
             short_trades = short_trades.dropna(how="all").reset_index(drop=True)
+            short_trades = short_trades[short_trades['side'] != -1]
 
             both = pd.concat([long_trades, short_trades], ignore_index=True)
             print(f"✅ {file} → {len(both)} labeled rows")
@@ -1000,6 +1017,10 @@ def load_and_label_data(
 
     # Save combined dataset
     combined.to_csv(save_path, index=False)
+
+    # Show quick stats for RR and stop-loss distance
+    print("\n📊 Summary stats:")
+    print(combined[['rr_label', 'stop_loss_distance']].describe())
     print(f"\n✅ Final dataset saved: {len(combined)} rows from {len(csv_files)} files → {save_path}")
 
     # Print metrics for each threshold
@@ -1012,7 +1033,7 @@ def load_and_label_data(
 
 # --- Example usage ---
 if __name__ == "__main__":
-    csv_files = ["gbpusd.csv", "usdcad.csv"]  # add more as needed
+    csv_files = ["gbpusd.csv"]  # , "usdcad.csv"add more as needed
     final_dataset = load_and_label_data(
         csv_files,
         save_path="test-combined.csv",
