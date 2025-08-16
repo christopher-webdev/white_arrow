@@ -6,411 +6,411 @@
 #   + Holdout Win-Rate Simulation (PNG plots)
 # ==============================#
 
-import os
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+# import os
+# import numpy as np
+# import pandas as pd
+# import matplotlib.pyplot as plt
 
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
-from sklearn.metrics import (
-    accuracy_score, f1_score, roc_auc_score,
-    mean_absolute_error, mean_squared_error, r2_score,
-    classification_report, confusion_matrix
-)
+# from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
+# from sklearn.metrics import (
+#     accuracy_score, f1_score, roc_auc_score,
+#     mean_absolute_error, mean_squared_error, r2_score,
+#     classification_report, confusion_matrix
+# )
 
-from xgboost import XGBClassifier, XGBRegressor
+# from xgboost import XGBClassifier, XGBRegressor
 
-# -----------------------------
-# Config
-# -----------------------------
-DATA_PATH      = "test-combined.csv"       # your combined labeled dataset
-MODEL_DIR      = "./xgb_artifacts_meta3/"
-os.makedirs(MODEL_DIR, exist_ok=True)
+# # -----------------------------
+# # Config
+# # -----------------------------
+# DATA_PATH      = "test-combined.csv"       # your combined labeled dataset
+# MODEL_DIR      = "./xgb_artifacts_meta3/"
+# os.makedirs(MODEL_DIR, exist_ok=True)
 
-RANDOM_STATE   = 42
-N_SPLITS_OOF   = 3
+# RANDOM_STATE   = 42
+# N_SPLITS_OOF   = 3
 
-# thresholds we care about
-RR_THRESHOLDS  = [1, 2]  # ONLY 1R and 2R
+# # thresholds we care about
+# RR_THRESHOLDS  = [1, 2]  # ONLY 1R and 2R
 
-# -----------------------------
-# Helpers
-# -----------------------------
-def rmse(y_true, y_pred):
-    return float(np.sqrt(((y_true - y_pred) ** 2).mean()))
+# # -----------------------------
+# # Helpers
+# # -----------------------------
+# def rmse(y_true, y_pred):
+#     return float(np.sqrt(((y_true - y_pred) ** 2).mean()))
 
-def best_threshold(y_true, p, metric='f1'):
-    grid = np.linspace(0.05, 0.95, 19)
-    best, best_t = -1.0, 0.5
-    for t in grid:
-        yhat = (p >= t).astype(int)
-        s = f1_score(y_true, yhat) if metric == 'f1' else accuracy_score(y_true, yhat)
-        if s > best:
-            best, best_t = s, t
-    return float(best_t)
+# def best_threshold(y_true, p, metric='f1'):
+#     grid = np.linspace(0.05, 0.95, 19)
+#     best, best_t = -1.0, 0.5
+#     for t in grid:
+#         yhat = (p >= t).astype(int)
+#         s = f1_score(y_true, yhat) if metric == 'f1' else accuracy_score(y_true, yhat)
+#         if s > best:
+#             best, best_t = s, t
+#     return float(best_t)
 
-def inv_freq_weights_multi(y):
-    counts = pd.Series(y).value_counts()
-    N, K = len(y), counts.shape[0]
-    w = {int(c): float(N / (K * counts.get(c, 1))) for c in counts.index}
-    return w
+# def inv_freq_weights_multi(y):
+#     counts = pd.Series(y).value_counts()
+#     N, K = len(y), counts.shape[0]
+#     w = {int(c): float(N / (K * counts.get(c, 1))) for c in counts.index}
+#     return w
 
-# -----------------------------
-# Labels
-# -----------------------------
-def generate_rr_labels_and_meta3(df, thr_list=RR_THRESHOLDS):
-    rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
-    thr_list = sorted(set(thr_list))
-    n = len(df)
+# # -----------------------------
+# # Labels
+# # -----------------------------
+# def generate_rr_labels_and_meta3(df, thr_list=RR_THRESHOLDS):
+#     rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
+#     thr_list = sorted(set(thr_list))
+#     n = len(df)
 
-    print(rr.describe([.5, .75, .90, .95, .99]))
-    for t in [1, 2, 3, 4, 5]:
-        share = (rr >= t).mean()
-        print(f"P(rr ≥ {t}) = {share:.3f}")
+#     print(rr.describe([.5, .75, .90, .95, .99]))
+#     for t in [1, 2, 3, 4, 5]:
+#         share = (rr >= t).mean()
+#         print(f"P(rr ≥ {t}) = {share:.3f}")
 
-    if 'pair' in df.columns:
-        print("\nShare ≥ last threshold by pair (top 10):")
-        print(
-            df.groupby('pair')['rr_label']
-              .apply(lambda s: (pd.to_numeric(s, errors='coerce') >= thr_list[-1]).mean())
-              .sort_values(ascending=False)
-              .head(10)
-        )
+#     if 'pair' in df.columns:
+#         print("\nShare ≥ last threshold by pair (top 10):")
+#         print(
+#             df.groupby('pair')['rr_label']
+#               .apply(lambda s: (pd.to_numeric(s, errors='coerce') >= thr_list[-1]).mean())
+#               .sort_values(ascending=False)
+#               .head(10)
+#         )
 
-    print("\n=== Binary targets (y_ge_{T}R) ===")
-    for thr in thr_list:
-        col = f'y_ge_{thr}R'
-        df[col] = (rr >= thr).astype('int8')
-        vc = df[col].value_counts().reindex([0, 1], fill_value=0)
-        neg, pos = int(vc[0]), int(vc[1])
-        print(f"{col}: pos={pos} ({pos/n:.2%}) | neg={neg} ({neg/n:.2%})")
+#     print("\n=== Binary targets (y_ge_{T}R) ===")
+#     for thr in thr_list:
+#         col = f'y_ge_{thr}R'
+#         df[col] = (rr >= thr).astype('int8')
+#         vc = df[col].value_counts().reindex([0, 1], fill_value=0)
+#         neg, pos = int(vc[0]), int(vc[1])
+#         print(f"{col}: pos={pos} ({pos/n:.2%}) | neg={neg} ({neg/n:.2%})")
 
-    # meta3: 0:<1R, 1:[1,2), 2:>=2R
-    bins = [-np.inf, 1, 2, np.inf]
-    df['y_meta3'] = pd.cut(rr, bins=bins, labels=False, right=False, include_lowest=True).astype('int8')
+#     # meta3: 0:<1R, 1:[1,2), 2:>=2R
+#     bins = [-np.inf, 1, 2, np.inf]
+#     df['y_meta3'] = pd.cut(rr, bins=bins, labels=False, right=False, include_lowest=True).astype('int8')
 
-    names = ["<1R", "1..2R", ">=2R"]
-    print("\n=== Meta3 target (y_meta3) ===")
-    vc_meta = df['y_meta3'].value_counts().sort_index()
-    for k in range(3):
-        cnt = int(vc_meta.get(k, 0))
-        print(f"class {k} ({names[k]:>5}): {cnt} ({cnt/n:.2%})")
-    print(f"TOTAL rows: {n}")
-    return df
+#     names = ["<1R", "1..2R", ">=2R"]
+#     print("\n=== Meta3 target (y_meta3) ===")
+#     vc_meta = df['y_meta3'].value_counts().sort_index()
+#     for k in range(3):
+#         cnt = int(vc_meta.get(k, 0))
+#         print(f"class {k} ({names[k]:>5}): {cnt} ({cnt/n:.2%})")
+#     print(f"TOTAL rows: {n}")
+#     return df
 
-# -----------------------------
-# OOF (no leakage)
-# -----------------------------
-def oof_binary_xgb(X, y, params=None, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
-    if params is None:
-        params = dict(
-            n_estimators=400, learning_rate=0.05,
-            max_depth=5, subsample=0.8, colsample_bytree=0.8,
-            reg_lambda=1.0, reg_alpha=0.0,
-            objective="binary:logistic",
-            eval_metric="auc", random_state=seed, n_jobs=-1
-        )
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    oof = np.zeros(len(X), dtype=float)
-    models = []
-    for tr, va in skf.split(X, y):
-        # class balance -> scale_pos_weight
-        neg = (y.iloc[tr] == 0).sum()
-        pos = (y.iloc[tr] == 1).sum()
-        spw = max(1.0, neg / max(1, pos))
-        params_fold = {**params, "scale_pos_weight": spw}
-        m = XGBClassifier(**params_fold)
-        m.fit(X.iloc[tr], y.iloc[tr])
-        oof[va] = m.predict_proba(X.iloc[va])[:, 1]
-        models.append(m)
-    return oof, models
+# # -----------------------------
+# # OOF (no leakage)
+# # -----------------------------
+# def oof_binary_xgb(X, y, params=None, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
+#     if params is None:
+#         params = dict(
+#             n_estimators=400, learning_rate=0.05,
+#             max_depth=5, subsample=0.8, colsample_bytree=0.8,
+#             reg_lambda=1.0, reg_alpha=0.0,
+#             objective="binary:logistic",
+#             eval_metric="auc", random_state=seed, n_jobs=-1
+#         )
+#     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+#     oof = np.zeros(len(X), dtype=float)
+#     models = []
+#     for tr, va in skf.split(X, y):
+#         # class balance -> scale_pos_weight
+#         neg = (y.iloc[tr] == 0).sum()
+#         pos = (y.iloc[tr] == 1).sum()
+#         spw = max(1.0, neg / max(1, pos))
+#         params_fold = {**params, "scale_pos_weight": spw}
+#         m = XGBClassifier(**params_fold)
+#         m.fit(X.iloc[tr], y.iloc[tr])
+#         oof[va] = m.predict_proba(X.iloc[va])[:, 1]
+#         models.append(m)
+#     return oof, models
 
-def oof_regressor_xgb(X, y, params=None, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
-    if params is None:
-        params = dict(
-            n_estimators=600, learning_rate=0.05,
-            max_depth=6, subsample=0.8, colsample_bytree=0.8,
-            reg_lambda=1.0, reg_alpha=0.0,
-            objective="reg:squarederror",
-            random_state=seed, n_jobs=-1
-        )
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    oof = np.zeros(len(X), dtype=float)
-    models = []
-    for tr, va in kf.split(X, y):
-        m = XGBRegressor(**params)
-        m.fit(X.iloc[tr], y.iloc[tr])
-        oof[va] = m.predict(X.iloc[va])
-        models.append(m)
-    return oof, models
+# def oof_regressor_xgb(X, y, params=None, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
+#     if params is None:
+#         params = dict(
+#             n_estimators=600, learning_rate=0.05,
+#             max_depth=6, subsample=0.8, colsample_bytree=0.8,
+#             reg_lambda=1.0, reg_alpha=0.0,
+#             objective="reg:squarederror",
+#             random_state=seed, n_jobs=-1
+#         )
+#     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+#     oof = np.zeros(len(X), dtype=float)
+#     models = []
+#     for tr, va in kf.split(X, y):
+#         m = XGBRegressor(**params)
+#         m.fit(X.iloc[tr], y.iloc[tr])
+#         oof[va] = m.predict(X.iloc[va])
+#         models.append(m)
+#     return oof, models
 
-# -----------------------------
-# Meta3 features from stack
-# -----------------------------
-def create_reg_features(X, oof_probs=None, models_dict=None):
-    Xf = X.copy()
-    if oof_probs is not None:
-        for name in oof_probs:
-            Xf[f'clf_{name}_prob'] = oof_probs[name]
-    elif models_dict is not None:
-        for name, model_list in models_dict.items():
-            Xf[f'clf_{name}_prob'] = np.mean([m.predict_proba(X)[:, 1] for m in model_list], axis=0)
-    return Xf
+# # -----------------------------
+# # Meta3 features from stack
+# # -----------------------------
+# def create_reg_features(X, oof_probs=None, models_dict=None):
+#     Xf = X.copy()
+#     if oof_probs is not None:
+#         for name in oof_probs:
+#             Xf[f'clf_{name}_prob'] = oof_probs[name]
+#     elif models_dict is not None:
+#         for name, model_list in models_dict.items():
+#             Xf[f'clf_{name}_prob'] = np.mean([m.predict_proba(X)[:, 1] for m in model_list], axis=0)
+#     return Xf
 
-def create_meta3_features(X, oof_probs=None, reg_vec=None, models_dict=None, reg_models=None):
-    Xf = create_reg_features(X, oof_probs=oof_probs, models_dict=models_dict)
-    if reg_vec is None and reg_models is not None:
-        reg_vec = np.mean([m.predict(create_reg_features(X, models_dict=models_dict)) for m in reg_models], axis=0)
-    if reg_vec is not None:
-        Xf['reg_pred'] = reg_vec
-    return Xf
+# def create_meta3_features(X, oof_probs=None, reg_vec=None, models_dict=None, reg_models=None):
+#     Xf = create_reg_features(X, oof_probs=oof_probs, models_dict=models_dict)
+#     if reg_vec is None and reg_models is not None:
+#         reg_vec = np.mean([m.predict(create_reg_features(X, models_dict=models_dict)) for m in reg_models], axis=0)
+#     if reg_vec is not None:
+#         Xf['reg_pred'] = reg_vec
+#     return Xf
 
-# -----------------------------
-# PNG-saving evaluator
-# -----------------------------
-def evaluate_selection(name, mask, rr, rr_target=None, plot=False, save_dir="selection_plots_xgb"):
-    import os
-    os.makedirs(save_dir, exist_ok=True)
+# # -----------------------------
+# # PNG-saving evaluator
+# # -----------------------------
+# def evaluate_selection(name, mask, rr, rr_target=None, plot=False, save_dir="selection_plots_xgb"):
+#     import os
+#     os.makedirs(save_dir, exist_ok=True)
 
-    n = int(mask.sum())
-    if n == 0:
-        print(f"\n[{name}] No trades selected.")
-        return
+#     n = int(mask.sum())
+#     if n == 0:
+#         print(f"\n[{name}] No trades selected.")
+#         return
 
-    rr_sel = rr[mask]
-    win_rate = float((rr_sel >= (rr_target if rr_target is not None else 0)).mean()) if rr_target is not None else np.nan
-    avg_rr = float(rr_sel.mean())
-    med_rr = float(np.median(rr_sel))
+#     rr_sel = rr[mask]
+#     win_rate = float((rr_sel >= (rr_target if rr_target is not None else 0)).mean()) if rr_target is not None else np.nan
+#     avg_rr = float(rr_sel.mean())
+#     med_rr = float(np.median(rr_sel))
 
-    print(f"\n[{name}]")
-    print(f"Trades taken: {n}")
-    if rr_target is not None:
-        print(f"Win rate (≥ {rr_target}R): {win_rate:.3f}")
-    print(f"Average RR: {avg_rr:.3f}")
-    print(f"Median RR:  {med_rr:.3f}")
+#     print(f"\n[{name}]")
+#     print(f"Trades taken: {n}")
+#     if rr_target is not None:
+#         print(f"Win rate (≥ {rr_target}R): {win_rate:.3f}")
+#     print(f"Average RR: {avg_rr:.3f}")
+#     print(f"Median RR:  {med_rr:.3f}")
 
-    if plot:
-        plt.figure()
-        plt.hist(rr_sel, bins=40)
-        plt.title(name)
-        plt.xlabel("RR")
-        plt.ylabel("Count")
-        plt.tight_layout()
-        safe_name = name.replace(" ", "_").replace(":", "").replace("/", "-")
-        path = os.path.join(save_dir, f"{safe_name}.png")
-        plt.savefig(path, dpi=300)
-        print(f"📁 Saved plot to: {path}")
-        plt.close()
+#     if plot:
+#         plt.figure()
+#         plt.hist(rr_sel, bins=40)
+#         plt.title(name)
+#         plt.xlabel("RR")
+#         plt.ylabel("Count")
+#         plt.tight_layout()
+#         safe_name = name.replace(" ", "_").replace(":", "").replace("/", "-")
+#         path = os.path.join(save_dir, f"{safe_name}.png")
+#         plt.savefig(path, dpi=300)
+#         print(f"📁 Saved plot to: {path}")
+#         plt.close()
 
-# -----------------------------
-# Load & prepare data
-# -----------------------------
-df = pd.read_csv(DATA_PATH)
-df = df[df['label'] != 0].copy()              # keep only win/loss rows
+# # -----------------------------
+# # Load & prepare data
+# # -----------------------------
+# df = pd.read_csv(DATA_PATH)
+# df = df[df['label'] != 0].copy()              # keep only win/loss rows
 
-# ensure 'pair' is categorical → one-hot only for 'pair' to keep it simple for XGB
-if 'pair' in df.columns:
-    df['pair'] = df['pair'].astype('category')
+# # ensure 'pair' is categorical → one-hot only for 'pair' to keep it simple for XGB
+# if 'pair' in df.columns:
+#     df['pair'] = df['pair'].astype('category')
 
-df = generate_rr_labels_and_meta3(df, thr_list=RR_THRESHOLDS)
+# df = generate_rr_labels_and_meta3(df, thr_list=RR_THRESHOLDS)
 
-# Build feature list (exclude targets + raw labels)
-drop_cols = ['label', 'rr_label', 'y_meta3'] + [f'y_ge_{i}R' for i in RR_THRESHOLDS]
-features = [c for c in df.columns if c not in drop_cols]
+# # Build feature list (exclude targets + raw labels)
+# drop_cols = ['label', 'rr_label', 'y_meta3'] + [f'y_ge_{i}R' for i in RR_THRESHOLDS]
+# features = [c for c in df.columns if c not in drop_cols]
 
-# One-hot only 'pair' (others are numeric already)
-if 'pair' in features:
-    features_no_pair = [c for c in features if c != 'pair']
-    X_all = pd.concat([df[features_no_pair], pd.get_dummies(df[['pair']], drop_first=True)], axis=1)
-else:
-    X_all = df[features].copy()
+# # One-hot only 'pair' (others are numeric already)
+# if 'pair' in features:
+#     features_no_pair = [c for c in features if c != 'pair']
+#     X_all = pd.concat([df[features_no_pair], pd.get_dummies(df[['pair']], drop_first=True)], axis=1)
+# else:
+#     X_all = df[features].copy()
 
-# Targets
-y_reg_all  = pd.to_numeric(df['rr_label'], errors='coerce')
-y_meta_all = df['y_meta3'].astype('int8')
-y_bin_all  = {f'1_{i}': df[f'y_ge_{i}R'].astype('int8') for i in RR_THRESHOLDS}
+# # Targets
+# y_reg_all  = pd.to_numeric(df['rr_label'], errors='coerce')
+# y_meta_all = df['y_meta3'].astype('int8')
+# y_bin_all  = {f'1_{i}': df[f'y_ge_{i}R'].astype('int8') for i in RR_THRESHOLDS}
 
-# Train/test split stratified by meta3
-X_train, X_test, y_reg_train, y_reg_test, y_meta_train, y_meta_test = train_test_split(
-    X_all, y_reg_all, y_meta_all, test_size=0.2, stratify=y_meta_all, random_state=RANDOM_STATE
-)
+# # Train/test split stratified by meta3
+# X_train, X_test, y_reg_train, y_reg_test, y_meta_train, y_meta_test = train_test_split(
+#     X_all, y_reg_all, y_meta_all, test_size=0.2, stratify=y_meta_all, random_state=RANDOM_STATE
+# )
 
-# -----------------------------
-# Train: 2 Binary models (OOF) + Regressor (OOF) + Meta
-# -----------------------------
-oof_probs = {}
-models_dict = {}
+# # -----------------------------
+# # Train: 2 Binary models (OOF) + Regressor (OOF) + Meta
+# # -----------------------------
+# oof_probs = {}
+# models_dict = {}
 
-# Binary 1R
-oof_1, models_1 = oof_binary_xgb(X_train, y_bin_all['1_1'].loc[X_train.index])
-oof_probs['1_1'] = oof_1
-models_dict['1_1'] = models_1
+# # Binary 1R
+# oof_1, models_1 = oof_binary_xgb(X_train, y_bin_all['1_1'].loc[X_train.index])
+# oof_probs['1_1'] = oof_1
+# models_dict['1_1'] = models_1
 
-# Binary 2R
-oof_2, models_2 = oof_binary_xgb(X_train, y_bin_all['1_2'].loc[X_train.index])
-oof_probs['1_2'] = oof_2
-models_dict['1_2'] = models_2
+# # Binary 2R
+# oof_2, models_2 = oof_binary_xgb(X_train, y_bin_all['1_2'].loc[X_train.index])
+# oof_probs['1_2'] = oof_2
+# models_dict['1_2'] = models_2
 
-# Regressor OOF (stack on bin OOF)
-X_train_reg = create_reg_features(X_train, oof_probs=oof_probs)
-oof_reg, reg_models = oof_regressor_xgb(X_train_reg, y_reg_train)
+# # Regressor OOF (stack on bin OOF)
+# X_train_reg = create_reg_features(X_train, oof_probs=oof_probs)
+# oof_reg, reg_models = oof_regressor_xgb(X_train_reg, y_reg_train)
 
-# Meta3 training on stacked features
-X_train_meta = create_meta3_features(X_train, oof_probs=oof_probs, reg_vec=oof_reg)
+# # Meta3 training on stacked features
+# X_train_meta = create_meta3_features(X_train, oof_probs=oof_probs, reg_vec=oof_reg)
 
-# meta sample weights (inverse-freq)
-w_map = inv_freq_weights_multi(y_meta_train)
-meta_w = y_meta_train.map(w_map).astype(float).values
+# # meta sample weights (inverse-freq)
+# w_map = inv_freq_weights_multi(y_meta_train)
+# meta_w = y_meta_train.map(w_map).astype(float).values
 
-meta_clf = XGBClassifier(
-    n_estimators=500, learning_rate=0.05, max_depth=6,
-    subsample=0.8, colsample_bytree=0.8,
-    reg_lambda=1.0, reg_alpha=0.0,
-    objective="multi:softprob", eval_metric="mlogloss",
-    num_class=3, random_state=RANDOM_STATE, n_jobs=-1
-)
-meta_clf.fit(X_train_meta, y_meta_train, sample_weight=meta_w)
+# meta_clf = XGBClassifier(
+#     n_estimators=500, learning_rate=0.05, max_depth=6,
+#     subsample=0.8, colsample_bytree=0.8,
+#     reg_lambda=1.0, reg_alpha=0.0,
+#     objective="multi:softprob", eval_metric="mlogloss",
+#     num_class=3, random_state=RANDOM_STATE, n_jobs=-1
+# )
+# meta_clf.fit(X_train_meta, y_meta_train, sample_weight=meta_w)
 
-# -----------------------------
-# Holdout: evaluate
-# -----------------------------
-print("\n=== BINARY CLASSIFIERS (Holdout) ===")
-p_test = {}
+# # -----------------------------
+# # Holdout: evaluate
+# # -----------------------------
+# print("\n=== BINARY CLASSIFIERS (Holdout) ===")
+# p_test = {}
 
-# Eval helper for binary
-def eval_binary(name, model_list, y_true, X):
-    p = np.mean([m.predict_proba(X)[:, 1] for m in model_list], axis=0)
-    t = best_threshold(y_true, p, metric='f1')
-    yhat = (p >= t).astype(int)
-    print(f"\n-- {name} --")
-    print("ROC AUC:", roc_auc_score(y_true, p))
-    print("Optimal threshold:", round(t, 3))
-    print("Accuracy:", accuracy_score(y_true, yhat))
-    print("F1:", f1_score(y_true, yhat))
-    print(confusion_matrix(y_true, yhat))
-    print(classification_report(y_true, yhat, target_names=['<thr','>=thr'], digits=4))
-    return p, t
+# # Eval helper for binary
+# def eval_binary(name, model_list, y_true, X):
+#     p = np.mean([m.predict_proba(X)[:, 1] for m in model_list], axis=0)
+#     t = best_threshold(y_true, p, metric='f1')
+#     yhat = (p >= t).astype(int)
+#     print(f"\n-- {name} --")
+#     print("ROC AUC:", roc_auc_score(y_true, p))
+#     print("Optimal threshold:", round(t, 3))
+#     print("Accuracy:", accuracy_score(y_true, yhat))
+#     print("F1:", f1_score(y_true, yhat))
+#     print(confusion_matrix(y_true, yhat))
+#     print(classification_report(y_true, yhat, target_names=['<thr','>=thr'], digits=4))
+#     return p, t
 
-# Binary 1R
-p1, t1 = eval_binary("1_1 (y_ge_1R)", models_dict['1_1'], y_bin_all['1_1'].loc[X_test.index], X_test)
-p_test['1_1'] = p1
+# # Binary 1R
+# p1, t1 = eval_binary("1_1 (y_ge_1R)", models_dict['1_1'], y_bin_all['1_1'].loc[X_test.index], X_test)
+# p_test['1_1'] = p1
 
-# Binary 2R
-p2, t2 = eval_binary("1_2 (y_ge_2R)", models_dict['1_2'], y_bin_all['1_2'].loc[X_test.index], X_test)
-p_test['1_2'] = p2
+# # Binary 2R
+# p2, t2 = eval_binary("1_2 (y_ge_2R)", models_dict['1_2'], y_bin_all['1_2'].loc[X_test.index], X_test)
+# p_test['1_2'] = p2
 
-# Regressor
-X_test_reg  = create_reg_features(X_test, models_dict=models_dict)
-reg_holdout = np.mean([m.predict(X_test_reg) for m in reg_models], axis=0)
-print("\n=== REGRESSOR (rr_label) ===")
-print("MAE:", mean_absolute_error(y_reg_test, reg_holdout))
-print("RMSE:", rmse(y_reg_test, reg_holdout))
-print("R2:", r2_score(y_reg_test, reg_holdout))
+# # Regressor
+# X_test_reg  = create_reg_features(X_test, models_dict=models_dict)
+# reg_holdout = np.mean([m.predict(X_test_reg) for m in reg_models], axis=0)
+# print("\n=== REGRESSOR (rr_label) ===")
+# print("MAE:", mean_absolute_error(y_reg_test, reg_holdout))
+# print("RMSE:", rmse(y_reg_test, reg_holdout))
+# print("R2:", r2_score(y_reg_test, reg_holdout))
 
-# Meta3
-X_test_meta = create_meta3_features(X_test, models_dict=models_dict, reg_models=reg_models)
-meta_pred = meta_clf.predict(X_test_meta)
-print("\n=== META3 (0=<1R, 1=1..2R, 2=>=2R) ===")
-target_names = [f"class_{c}" for c in sorted(np.unique(y_meta_test))]
-print(classification_report(y_meta_test, meta_pred, target_names=target_names, digits=4))
-print(confusion_matrix(y_meta_test, meta_pred))
+# # Meta3
+# X_test_meta = create_meta3_features(X_test, models_dict=models_dict, reg_models=reg_models)
+# meta_pred = meta_clf.predict(X_test_meta)
+# print("\n=== META3 (0=<1R, 1=1..2R, 2=>=2R) ===")
+# target_names = [f"class_{c}" for c in sorted(np.unique(y_meta_test))]
+# print(classification_report(y_meta_test, meta_pred, target_names=target_names, digits=4))
+# print(confusion_matrix(y_meta_test, meta_pred))
 
-# -----------------------------
-# Holdout WIN-RATE SIMULATION (PNG saved)
-# -----------------------------
-rr_hold = pd.to_numeric(y_reg_test, errors='coerce').values
+# # -----------------------------
+# # Holdout WIN-RATE SIMULATION (PNG saved)
+# # -----------------------------
+# rr_hold = pd.to_numeric(y_reg_test, errors='coerce').values
 
-mask_A = (p_test['1_1'] >= t1)
-evaluate_selection("A) Binary 1R filter (prob >= t1)", mask_A, rr_hold, rr_target=1, plot=True)
+# mask_A = (p_test['1_1'] >= t1)
+# evaluate_selection("A) Binary 1R filter (prob >= t1)", mask_A, rr_hold, rr_target=1, plot=True)
 
-mask_B = (p_test['1_2'] >= t2)
-evaluate_selection("B) Binary 2R filter (prob >= t2)", mask_B, rr_hold, rr_target=2, plot=True)
+# mask_B = (p_test['1_2'] >= t2)
+# evaluate_selection("B) Binary 2R filter (prob >= t2)", mask_B, rr_hold, rr_target=2, plot=True)
 
-mask_C = (p_test['1_1'] >= t1) & (p_test['1_2'] >= t2)
-evaluate_selection("C) Both binaries (≥1R & ≥2R)", mask_C, rr_hold, rr_target=2, plot=True)
+# mask_C = (p_test['1_1'] >= t1) & (p_test['1_2'] >= t2)
+# evaluate_selection("C) Both binaries (≥1R & ≥2R)", mask_C, rr_hold, rr_target=2, plot=True)
 
-mask_D = (meta_pred == 2)
-evaluate_selection("D) Meta3 predicts >=2R", mask_D, rr_hold, rr_target=2, plot=True)
+# mask_D = (meta_pred == 2)
+# evaluate_selection("D) Meta3 predicts >=2R", mask_D, rr_hold, rr_target=2, plot=True)
 
-q = 0.75
-thr_reg = np.quantile(reg_holdout, q)
-mask_E = (reg_holdout >= thr_reg)
-evaluate_selection(f"E) Regressor top 25% (thr={thr_reg:.3f})", mask_E, rr_hold, rr_target=2, plot=True)
+# q = 0.75
+# thr_reg = np.quantile(reg_holdout, q)
+# mask_E = (reg_holdout >= thr_reg)
+# evaluate_selection(f"E) Regressor top 25% (thr={thr_reg:.3f})", mask_E, rr_hold, rr_target=2, plot=True)
 
-# -----------------------------
-# Final training on ALL data (single models) + save
-# -----------------------------
-print("\nTraining final XGB models on ALL data...")
+# # -----------------------------
+# # Final training on ALL data (single models) + save
+# # -----------------------------
+# print("\nTraining final XGB models on ALL data...")
 
-# Refit binaries on all data
-# 1R
-neg = (y_bin_all['1_1'] == 0).sum()
-pos = (y_bin_all['1_1'] == 1).sum()
-spw_1 = max(1.0, neg / max(1, pos))
-clf1_all = XGBClassifier(
-    n_estimators=400, learning_rate=0.05, max_depth=5,
-    subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
-    objective="binary:logistic", eval_metric="auc",
-    random_state=RANDOM_STATE, n_jobs=-1, scale_pos_weight=spw_1
-).fit(X_all, y_bin_all['1_1'])
+# # Refit binaries on all data
+# # 1R
+# neg = (y_bin_all['1_1'] == 0).sum()
+# pos = (y_bin_all['1_1'] == 1).sum()
+# spw_1 = max(1.0, neg / max(1, pos))
+# clf1_all = XGBClassifier(
+#     n_estimators=400, learning_rate=0.05, max_depth=5,
+#     subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+#     objective="binary:logistic", eval_metric="auc",
+#     random_state=RANDOM_STATE, n_jobs=-1, scale_pos_weight=spw_1
+# ).fit(X_all, y_bin_all['1_1'])
 
-# 2R
-neg = (y_bin_all['1_2'] == 0).sum()
-pos = (y_bin_all['1_2'] == 1).sum()
-spw_2 = max(1.0, neg / max(1, pos))
-clf2_all = XGBClassifier(
-    n_estimators=400, learning_rate=0.05, max_depth=5,
-    subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
-    objective="binary:logistic", eval_metric="auc",
-    random_state=RANDOM_STATE, n_jobs=-1, scale_pos_weight=spw_2
-).fit(X_all, y_bin_all['1_2'])
+# # 2R
+# neg = (y_bin_all['1_2'] == 0).sum()
+# pos = (y_bin_all['1_2'] == 1).sum()
+# spw_2 = max(1.0, neg / max(1, pos))
+# clf2_all = XGBClassifier(
+#     n_estimators=400, learning_rate=0.05, max_depth=5,
+#     subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+#     objective="binary:logistic", eval_metric="auc",
+#     random_state=RANDOM_STATE, n_jobs=-1, scale_pos_weight=spw_2
+# ).fit(X_all, y_bin_all['1_2'])
 
-# Regressor on all data (stack with proba from full models)
-p1_full = clf1_all.predict_proba(X_all)[:, 1]
-p2_full = clf2_all.predict_proba(X_all)[:, 1]
-X_all_reg = X_all.copy()
-X_all_reg['clf_1_1_prob'] = p1_full
-X_all_reg['clf_1_2_prob'] = p2_full
+# # Regressor on all data (stack with proba from full models)
+# p1_full = clf1_all.predict_proba(X_all)[:, 1]
+# p2_full = clf2_all.predict_proba(X_all)[:, 1]
+# X_all_reg = X_all.copy()
+# X_all_reg['clf_1_1_prob'] = p1_full
+# X_all_reg['clf_1_2_prob'] = p2_full
 
-reg_all = XGBRegressor(
-    n_estimators=600, learning_rate=0.05, max_depth=6,
-    subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
-    objective="reg:squarederror", random_state=RANDOM_STATE, n_jobs=-1
-).fit(X_all_reg, y_reg_all)
+# reg_all = XGBRegressor(
+#     n_estimators=600, learning_rate=0.05, max_depth=6,
+#     subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+#     objective="reg:squarederror", random_state=RANDOM_STATE, n_jobs=-1
+# ).fit(X_all_reg, y_reg_all)
 
-# Meta on all data (stacked)
-reg_all_pred = reg_all.predict(X_all_reg)
-X_all_meta = X_all_reg.copy()
-X_all_meta['reg_pred'] = reg_all_pred
+# # Meta on all data (stacked)
+# reg_all_pred = reg_all.predict(X_all_reg)
+# X_all_meta = X_all_reg.copy()
+# X_all_meta['reg_pred'] = reg_all_pred
 
-w_map_all = inv_freq_weights_multi(y_meta_all)
-meta_w_all = y_meta_all.map(w_map_all).astype(float).values
+# w_map_all = inv_freq_weights_multi(y_meta_all)
+# meta_w_all = y_meta_all.map(w_map_all).astype(float).values
 
-meta_all = XGBClassifier(
-    n_estimators=500, learning_rate=0.05, max_depth=6,
-    subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
-    objective="multi:softprob", eval_metric="mlogloss",
-    num_class=3, random_state=RANDOM_STATE, n_jobs=-1
-).fit(X_all_meta, y_meta_all, sample_weight=meta_w_all)
+# meta_all = XGBClassifier(
+#     n_estimators=500, learning_rate=0.05, max_depth=6,
+#     subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+#     objective="multi:softprob", eval_metric="mlogloss",
+#     num_class=3, random_state=RANDOM_STATE, n_jobs=-1
+# ).fit(X_all_meta, y_meta_all, sample_weight=meta_w_all)
 
-# Save models (xgboost native)
-clf1_all.save_model(os.path.join(MODEL_DIR, "xgb_classifier_1_1.json"))
-clf2_all.save_model(os.path.join(MODEL_DIR, "xgb_classifier_1_2.json"))
-reg_all.save_model(os.path.join(MODEL_DIR, "xgb_regressor.json"))
-meta_all.save_model(os.path.join(MODEL_DIR, "xgb_meta3.json"))
+# # Save models (xgboost native)
+# clf1_all.save_model(os.path.join(MODEL_DIR, "xgb_classifier_1_1.json"))
+# clf2_all.save_model(os.path.join(MODEL_DIR, "xgb_classifier_1_2.json"))
+# reg_all.save_model(os.path.join(MODEL_DIR, "xgb_regressor.json"))
+# meta_all.save_model(os.path.join(MODEL_DIR, "xgb_meta3.json"))
 
-# Save a small metadata json
-import json
-meta_info = {
-    "features": list(X_all.columns),
-    "rr_thresholds": RR_THRESHOLDS,
-    "meta3_classes": ["<1R", "1..2R", ">=2R"],
-    "notes": "XGB two-binary + reg + meta3. Pair one-hot encoded."
-}
-with open(os.path.join(MODEL_DIR, "metadata.json"), "w") as f:
-    json.dump(meta_info, f, indent=2)
+# # Save a small metadata json
+# import json
+# meta_info = {
+#     "features": list(X_all.columns),
+#     "rr_thresholds": RR_THRESHOLDS,
+#     "meta3_classes": ["<1R", "1..2R", ">=2R"],
+#     "notes": "XGB two-binary + reg + meta3. Pair one-hot encoded."
+# }
+# with open(os.path.join(MODEL_DIR, "metadata.json"), "w") as f:
+#     json.dump(meta_info, f, indent=2)
 
-print("\n✅ XGBoost models trained and saved.")
+# print("\n✅ XGBoost models trained and saved.")
 
 
 # # # ==============================#
@@ -1393,435 +1393,435 @@ print("\n✅ XGBoost models trained and saved.")
 # dump_importance(reg_final,  reg_feature_names,  f"{MODEL_DIR}regression_feature_importance.csv", "Regressor")
 # dump_importance(meta_final, meta_feature_names, f"{MODEL_DIR}meta_feature_importance.csv", "Meta")
 
-# # ==============================#
-# #  STACKED RR TRAINING PIPELINE #
-# #  (1:1, 1:2, Regressor, Meta)  #
-# # ==============================#
+# ==============================#
+#  STACKED RR TRAINING PIPELINE #
+#  (1:1, 1:2, Regressor, Meta)  #
+# ==============================#
 
-# import os
-# import joblib
-# import numpy as np
-# import pandas as pd
-# import optuna
-# from lightgbm import LGBMClassifier, LGBMRegressor
+import os
+import joblib
+import numpy as np
+import pandas as pd
+import optuna
+from lightgbm import LGBMClassifier, LGBMRegressor
 
-# from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
-# from sklearn.metrics import (
-#     mean_absolute_error, mean_squared_error, r2_score,
-#     accuracy_score, f1_score, roc_auc_score,
-#     confusion_matrix, classification_report
-# )
-# from sklearn.base import clone
+from sklearn.model_selection import train_test_split, StratifiedKFold, KFold
+from sklearn.metrics import (
+    mean_absolute_error, mean_squared_error, r2_score,
+    accuracy_score, f1_score, roc_auc_score,
+    confusion_matrix, classification_report
+)
+from sklearn.base import clone
 
-# # -----------------------------
-# # Config
-# # -----------------------------
-# DATA_PATH = "test-combined.csv"
-# MODEL_DIR = "./tmodel_artifacts_combinedx/"
-# os.makedirs(MODEL_DIR, exist_ok=True)
+# -----------------------------
+# Config
+# -----------------------------
+DATA_PATH = "test-combined.csv"
+MODEL_DIR = "./tmodel_artifacts_combinedx/"
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-# RANDOM_STATE = 42
-# N_TRIALS_BIN = 1
-# N_TRIALS_REG = 1
-# N_TRIALS_META = 1
-# N_SPLITS_OOF = 3
-# N_SPLITS_CV = 3
+RANDOM_STATE = 42
+N_TRIALS_BIN = 50
+N_TRIALS_REG = 50
+N_TRIALS_META = 50
+N_SPLITS_OOF = 3
+N_SPLITS_CV = 3
 
-# # -----------------------------
-# # Labels
-# # -----------------------------
-# def generate_rr_classification_labels(df, thr1=1.0, thr2=2.0):
-#     """
-#     Creates:
-#       - y_ge_1R, y_ge_2R (binary, overlapping: multi-label style)
-#       - y_meta (exclusive multiclass: 0=<1R, 1=1–<2R, 2=≥2R)
-#     """
-#     rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
-#     df['y_ge_1R'] = (rr >= thr1).astype('int8')
-#     df['y_ge_2R'] = (rr >= thr2).astype('int8')
-#     df['y_meta']  = np.where(rr >= thr2, 2,
-#                       np.where(rr >= thr1, 1, 0)).astype('int8')
-#     return df
+# -----------------------------
+# Labels
+# -----------------------------
+def generate_rr_classification_labels(df, thr1=1.0, thr2=2.0):
+    """
+    Creates:
+      - y_ge_1R, y_ge_2R (binary, overlapping: multi-label style)
+      - y_meta (exclusive multiclass: 0=<1R, 1=1–<2R, 2=≥2R)
+    """
+    rr = pd.to_numeric(df['rr_label'], errors='coerce').fillna(-1.0)
+    df['y_ge_1R'] = (rr >= thr1).astype('int8')
+    df['y_ge_2R'] = (rr >= thr2).astype('int8')
+    df['y_meta']  = np.where(rr >= thr2, 2,
+                      np.where(rr >= thr1, 1, 0)).astype('int8')
+    return df
 
-# TARGET_COLUMNS = {
-#     'binary_rr1': 'y_ge_1R',
-#     'binary_rr2': 'y_ge_2R',
-#     'regression': 'rr_label',
-#     'meta': 'y_meta'
-# }
-# CLASSIFIER_NAMES = {'1_1': 'binary_rr1', '1_2': 'binary_rr2'}
+TARGET_COLUMNS = {
+    'binary_rr1': 'y_ge_1R',
+    'binary_rr2': 'y_ge_2R',
+    'regression': 'rr_label',
+    'meta': 'y_meta'
+}
+CLASSIFIER_NAMES = {'1_1': 'binary_rr1', '1_2': 'binary_rr2'}
 
-# # -----------------------------
-# # Utilities
-# # -----------------------------
-# def rmse(y_true, y_pred):
-#     return np.sqrt(mean_squared_error(y_true, y_pred))
+# -----------------------------
+# Utilities
+# -----------------------------
+def rmse(y_true, y_pred):
+    return np.sqrt(mean_squared_error(y_true, y_pred))
 
-# def inv_freq_weights_binary(y):
-#     counts = pd.Series(y).value_counts()
-#     N, K = len(y), 2
-#     return {int(c): float(N / (K * counts.get(c, 1))) for c in [0, 1]}
+def inv_freq_weights_binary(y):
+    counts = pd.Series(y).value_counts()
+    N, K = len(y), 2
+    return {int(c): float(N / (K * counts.get(c, 1))) for c in [0, 1]}
 
-# def inv_freq_weights_multi(y):
-#     counts = pd.Series(y).value_counts()
-#     N, K = len(y), counts.shape[0]
-#     return {int(c): float(N / (K * counts.get(c, 1))) for c in counts.index}
+def inv_freq_weights_multi(y):
+    counts = pd.Series(y).value_counts()
+    N, K = len(y), counts.shape[0]
+    return {int(c): float(N / (K * counts.get(c, 1))) for c in counts.index}
 
-# # -----------------------------
-# # Manual CV scorers (so we can pass categorical_feature=['pair'])
-# # -----------------------------
-# def cv_score_classifier(params, X, y, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
-#     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-#     scores = []
-#     for tr, va in skf.split(X, y):
-#         m = LGBMClassifier(**params)
-#         m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
-#         prob = m.predict_proba(X.iloc[va])[:, 1]
-#         scores.append(roc_auc_score(y.iloc[va], prob))
-#     return float(np.mean(scores))
+# -----------------------------
+# Manual CV scorers (so we can pass categorical_feature=['pair'])
+# -----------------------------
+def cv_score_classifier(params, X, y, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    scores = []
+    for tr, va in skf.split(X, y):
+        m = LGBMClassifier(**params)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        prob = m.predict_proba(X.iloc[va])[:, 1]
+        scores.append(roc_auc_score(y.iloc[va], prob))
+    return float(np.mean(scores))
 
-# def cv_score_regressor(params, X, y, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
-#     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-#     scores = []
-#     for tr, va in kf.split(X, y):
-#         m = LGBMRegressor(**params)
-#         m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
-#         pred = m.predict(X.iloc[va])
-#         scores.append(rmse(y.iloc[va], pred))
-#     return float(np.mean(scores))  # lower is better
+def cv_score_regressor(params, X, y, n_splits=N_SPLITS_CV, seed=RANDOM_STATE):
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    scores = []
+    for tr, va in kf.split(X, y):
+        m = LGBMRegressor(**params)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        pred = m.predict(X.iloc[va])
+        scores.append(rmse(y.iloc[va], pred))
+    return float(np.mean(scores))  # lower is better
 
-# # -----------------------------
-# # Optuna tuning
-# # -----------------------------
-# def tune_classifier_params(X, y, weight_grid=None, name="clf"):
-#     if weight_grid is None:
-#         weight_grid = [
-#             None,
-#             "balanced",
-#             inv_freq_weights_binary(y),
-#             {0: 1.0, 1: 2.0},
-#             {0: 1.0, 1: 3.0}
-#         ]
-#     def objective(trial):
-#         params = {
-#             "objective": "binary",
-#             "boosting_type": "gbdt",
-#             "verbosity": -1,
-#             "random_state": RANDOM_STATE,
-#             "n_estimators": trial.suggest_int("n_estimators", 150, 800),
-#             "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
-#             "num_leaves": trial.suggest_int("num_leaves", 16, 128),
-#             "max_depth": trial.suggest_int("max_depth", 3, 12),
-#             "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
-#             "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
-#             "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
-#             "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
-#             "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
-#             "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
-#             "class_weight": trial.suggest_categorical("class_weight", weight_grid),
-#         }
-#         return cv_score_classifier(params, X, y)
-#     study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
-#     study.optimize(objective, n_trials=N_TRIALS_BIN)
-#     return study.best_params
+# -----------------------------
+# Optuna tuning
+# -----------------------------
+def tune_classifier_params(X, y, weight_grid=None, name="clf"):
+    if weight_grid is None:
+        weight_grid = [
+            None,
+            "balanced",
+            inv_freq_weights_binary(y),
+            {0: 1.0, 1: 2.0},
+            {0: 1.0, 1: 3.0}
+        ]
+    def objective(trial):
+        params = {
+            "objective": "binary",
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 150, 800),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+            "class_weight": trial.suggest_categorical("class_weight", weight_grid),
+        }
+        return cv_score_classifier(params, X, y)
+    study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_BIN)
+    return study.best_params
 
-# def tune_regressor_params(X, y, name="reg"):
-#     def objective(trial):
-#         params = {
-#             "objective": "regression",
-#             "boosting_type": "gbdt",
-#             "verbosity": -1,
-#             "random_state": RANDOM_STATE,
-#             "n_estimators": trial.suggest_int("n_estimators", 150, 800),
-#             "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
-#             "num_leaves": trial.suggest_int("num_leaves", 16, 128),
-#             "max_depth": trial.suggest_int("max_depth", 3, 12),
-#             "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
-#             "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
-#             "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
-#             "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
-#             "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
-#             "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
-#         }
-#         return cv_score_regressor(params, X, y)  # lower is better
-#     study = optuna.create_study(direction="minimize", study_name=f"tune_{name}")
-#     study.optimize(objective, n_trials=N_TRIALS_REG)
-#     return study.best_params
+def tune_regressor_params(X, y, name="reg"):
+    def objective(trial):
+        params = {
+            "objective": "regression",
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 150, 800),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+        }
+        return cv_score_regressor(params, X, y)  # lower is better
+    study = optuna.create_study(direction="minimize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_REG)
+    return study.best_params
 
-# def tune_meta_params(X, y, name="meta"):
-#     weight_grid = [
-#         None,
-#         "balanced",
-#         inv_freq_weights_multi(y),
-#         {0: 1.0, 1: 1.5, 2: 1.8} if set(pd.Series(y).unique()) == {0,1,2} else None
-#     ]
-#     weight_grid = [w for w in weight_grid if w is not None]
+def tune_meta_params(X, y, name="meta"):
+    weight_grid = [
+        None,
+        "balanced",
+        inv_freq_weights_multi(y),
+        {0: 1.0, 1: 1.5, 2: 1.8} if set(pd.Series(y).unique()) == {0,1,2} else None
+    ]
+    weight_grid = [w for w in weight_grid if w is not None]
 
-#     def objective(trial):
-#         params = {
-#             "objective": "multiclass",
-#             "num_class": int(len(np.unique(y))),
-#             "boosting_type": "gbdt",
-#             "verbosity": -1,
-#             "random_state": RANDOM_STATE,
-#             "n_estimators": trial.suggest_int("n_estimators", 150, 800),
-#             "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
-#             "num_leaves": trial.suggest_int("num_leaves", 16, 128),
-#             "max_depth": trial.suggest_int("max_depth", 3, 12),
-#             "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
-#             "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
-#             "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
-#             "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
-#             "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
-#             "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
-#             "class_weight": trial.suggest_categorical("class_weight", weight_grid)
-#         }
-#         # weighted F1 across classes
-#         skf = StratifiedKFold(n_splits=N_SPLITS_CV, shuffle=True, random_state=RANDOM_STATE)
-#         f1s = []
-#         for tr, va in skf.split(X, y):
-#             m = LGBMClassifier(**params)
-#             m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
-#             pred = m.predict(X.iloc[va])
-#             f1s.append(f1_score(y.iloc[va], pred, average='weighted'))
-#         return float(np.mean(f1s))
+    def objective(trial):
+        params = {
+            "objective": "multiclass",
+            "num_class": int(len(np.unique(y))),
+            "boosting_type": "gbdt",
+            "verbosity": -1,
+            "random_state": RANDOM_STATE,
+            "n_estimators": trial.suggest_int("n_estimators", 150, 800),
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
+            "num_leaves": trial.suggest_int("num_leaves", 16, 128),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 60),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.6, 1.0),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 1.0),
+            "bagging_freq": trial.suggest_int("bagging_freq", 1, 10),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-8, 10.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 1e-8, 10.0, log=True),
+            "class_weight": trial.suggest_categorical("class_weight", weight_grid)
+        }
+        # weighted F1 across classes
+        skf = StratifiedKFold(n_splits=N_SPLITS_CV, shuffle=True, random_state=RANDOM_STATE)
+        f1s = []
+        for tr, va in skf.split(X, y):
+            m = LGBMClassifier(**params)
+            m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+            pred = m.predict(X.iloc[va])
+            f1s.append(f1_score(y.iloc[va], pred, average='weighted'))
+        return float(np.mean(f1s))
 
-#     study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
-#     study.optimize(objective, n_trials=N_TRIALS_META)
-#     return study.best_params
+    study = optuna.create_study(direction="maximize", study_name=f"tune_{name}")
+    study.optimize(objective, n_trials=N_TRIALS_META)
+    return study.best_params
 
-# # -----------------------------
-# # OOF helpers (no leakage)
-# # -----------------------------
-# def oof_binary(base_estimator, X, y, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
-#     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-#     oof = np.zeros(len(X), dtype=float)
-#     models = []
-#     for tr, va in skf.split(X, y):
-#         m = clone(base_estimator)
-#         m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
-#         oof[va] = m.predict_proba(X.iloc[va])[:, 1]
-#         models.append(m)
-#     return oof, models
+# -----------------------------
+# OOF helpers (no leakage)
+# -----------------------------
+def oof_binary(base_estimator, X, y, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    oof = np.zeros(len(X), dtype=float)
+    models = []
+    for tr, va in skf.split(X, y):
+        m = clone(base_estimator)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        oof[va] = m.predict_proba(X.iloc[va])[:, 1]
+        models.append(m)
+    return oof, models
 
-# def oof_regressor(base_estimator, X, y, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
-#     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-#     oof = np.zeros(len(X), dtype=float)
-#     models = []
-#     for tr, va in kf.split(X, y):
-#         m = clone(base_estimator)
-#         m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
-#         oof[va] = m.predict(X.iloc[va])
-#         models.append(m)
-#     return oof, models
+def oof_regressor(base_estimator, X, y, n_splits=N_SPLITS_OOF, seed=RANDOM_STATE):
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    oof = np.zeros(len(X), dtype=float)
+    models = []
+    for tr, va in kf.split(X, y):
+        m = clone(base_estimator)
+        m.fit(X.iloc[tr], y.iloc[tr], categorical_feature=['pair'])
+        oof[va] = m.predict(X.iloc[va])
+        models.append(m)
+    return oof, models
 
-# # -----------------------------
-# # Feature builders (stacking)
-# # -----------------------------
-# def create_reg_features(X, p11=None, p12=None, models_11=None, models_12=None):
-#     Xf = X.copy()
-#     if p11 is None:
-#         p11 = np.mean([m.predict_proba(X)[:, 1] for m in models_11], axis=0)
-#     if p12 is None:
-#         p12 = np.mean([m.predict_proba(X)[:, 1] for m in models_12], axis=0)
-#     Xf['clf_1_1_prob'] = p11
-#     Xf['clf_1_2_prob'] = p12
-#     return Xf
+# -----------------------------
+# Feature builders (stacking)
+# -----------------------------
+def create_reg_features(X, p11=None, p12=None, models_11=None, models_12=None):
+    Xf = X.copy()
+    if p11 is None:
+        p11 = np.mean([m.predict_proba(X)[:, 1] for m in models_11], axis=0)
+    if p12 is None:
+        p12 = np.mean([m.predict_proba(X)[:, 1] for m in models_12], axis=0)
+    Xf['clf_1_1_prob'] = p11
+    Xf['clf_1_2_prob'] = p12
+    return Xf
 
-# def create_meta_features(X, p11=None, p12=None, reg_vec=None,
-#                          models_11=None, models_12=None, reg_models=None):
-#     Xf = X.copy()
-#     if p11 is None:
-#         p11 = np.mean([m.predict_proba(X)[:, 1] for m in models_11], axis=0)
-#     if p12 is None:
-#         p12 = np.mean([m.predict_proba(X)[:, 1] for m in models_12], axis=0)
-#     Xf['clf_1_1_prob'] = p11
-#     Xf['clf_1_2_prob'] = p12
+def create_meta_features(X, p11=None, p12=None, reg_vec=None,
+                         models_11=None, models_12=None, reg_models=None):
+    Xf = X.copy()
+    if p11 is None:
+        p11 = np.mean([m.predict_proba(X)[:, 1] for m in models_11], axis=0)
+    if p12 is None:
+        p12 = np.mean([m.predict_proba(X)[:, 1] for m in models_12], axis=0)
+    Xf['clf_1_1_prob'] = p11
+    Xf['clf_1_2_prob'] = p12
 
-#     if reg_vec is None:
-#         reg_vec = np.mean([m.predict(create_reg_features(X, p11, p12, models_11, models_12))
-#                            for m in reg_models], axis=0)
-#     Xf['reg_pred'] = reg_vec
-#     return Xf
+    if reg_vec is None:
+        reg_vec = np.mean([m.predict(create_reg_features(X, p11, p12, models_11, models_12))
+                           for m in reg_models], axis=0)
+    Xf['reg_pred'] = reg_vec
+    return Xf
 
-# # -----------------------------
-# # Load data
-# # -----------------------------
-# df = pd.read_csv(DATA_PATH)
-# df = df[df['label'] != 0].copy()              # keep only win/loss
-# df['pair'] = df['pair'].astype('category')
-# df = generate_rr_classification_labels(df, thr1=1.0, thr2=2.0)
+# -----------------------------
+# Load data
+# -----------------------------
+df = pd.read_csv(DATA_PATH)
+df = df[df['label'] != 0].copy()              # keep only win/loss
+df['pair'] = df['pair'].astype('category')
+df = generate_rr_classification_labels(df, thr1=1.0, thr2=2.0)
 
-# # Feature list
-# drop_cols = ['label',
-#              TARGET_COLUMNS['regression'],
-#              TARGET_COLUMNS['binary_rr1'],
-#              TARGET_COLUMNS['binary_rr2'],
-#              TARGET_COLUMNS['meta']]
-# features = [c for c in df.columns if c not in drop_cols]
+# Feature list
+drop_cols = ['label',
+             TARGET_COLUMNS['regression'],
+             TARGET_COLUMNS['binary_rr1'],
+             TARGET_COLUMNS['binary_rr2'],
+             TARGET_COLUMNS['meta']]
+features = [c for c in df.columns if c not in drop_cols]
 
-# # Split
-# X_train, X_test, y_reg_train, y_reg_test, y_bin_train, y_bin_test, y_meta_train, y_meta_test = train_test_split(
-#     df[features],
-#     df[TARGET_COLUMNS['regression']],
-#     df[[TARGET_COLUMNS['binary_rr1'], TARGET_COLUMNS['binary_rr2']]],
-#     df[TARGET_COLUMNS['meta']],
-#     test_size=0.2,
-#     stratify=df[TARGET_COLUMNS['meta']],
-#     random_state=RANDOM_STATE
-# )
+# Split
+X_train, X_test, y_reg_train, y_reg_test, y_bin_train, y_bin_test, y_meta_train, y_meta_test = train_test_split(
+    df[features],
+    df[TARGET_COLUMNS['regression']],
+    df[[TARGET_COLUMNS['binary_rr1'], TARGET_COLUMNS['binary_rr2']]],
+    df[TARGET_COLUMNS['meta']],
+    test_size=0.2,
+    stratify=df[TARGET_COLUMNS['meta']],
+    random_state=RANDOM_STATE
+)
 
-# # -----------------------------
-# # 1) Tune base classifiers on train
-# # -----------------------------
-# best_params_11 = tune_classifier_params(X_train, y_bin_train[TARGET_COLUMNS['binary_rr1']], name="clf_1_1")
-# best_params_12 = tune_classifier_params(X_train, y_bin_train[TARGET_COLUMNS['binary_rr2']], name="clf_1_2")
+# -----------------------------
+# 1) Tune base classifiers on train
+# -----------------------------
+best_params_11 = tune_classifier_params(X_train, y_bin_train[TARGET_COLUMNS['binary_rr1']], name="clf_1_1")
+best_params_12 = tune_classifier_params(X_train, y_bin_train[TARGET_COLUMNS['binary_rr2']], name="clf_1_2")
 
-# clf11_base = LGBMClassifier(**best_params_11)
-# clf12_base = LGBMClassifier(**best_params_12)
+clf11_base = LGBMClassifier(**best_params_11)
+clf12_base = LGBMClassifier(**best_params_12)
 
-# # -----------------------------
-# # 2) OOF for base (train) and fold models for test
-# # -----------------------------
-# oof_11, models_11 = oof_binary(clf11_base, X_train, y_bin_train[TARGET_COLUMNS['binary_rr1']])
-# oof_12, models_12 = oof_binary(clf12_base, X_train, y_bin_train[TARGET_COLUMNS['binary_rr2']])
+# -----------------------------
+# 2) OOF for base (train) and fold models for test
+# -----------------------------
+oof_11, models_11 = oof_binary(clf11_base, X_train, y_bin_train[TARGET_COLUMNS['binary_rr1']])
+oof_12, models_12 = oof_binary(clf12_base, X_train, y_bin_train[TARGET_COLUMNS['binary_rr2']])
 
-# # -----------------------------
-# # 3) Tune regressor on train using OOF probs (no leakage)
-# # -----------------------------
-# X_train_reg = create_reg_features(X_train, p11=oof_11, p12=oof_12)
-# best_params_reg = tune_regressor_params(X_train_reg, y_reg_train, name="reg")
-# reg_base = LGBMRegressor(**best_params_reg)
+# -----------------------------
+# 3) Tune regressor on train using OOF probs (no leakage)
+# -----------------------------
+X_train_reg = create_reg_features(X_train, p11=oof_11, p12=oof_12)
+best_params_reg = tune_regressor_params(X_train_reg, y_reg_train, name="reg")
+reg_base = LGBMRegressor(**best_params_reg)
 
-# # OOF reg for meta training
-# oof_reg, reg_models = oof_regressor(reg_base, X_train_reg, y_reg_train)
+# OOF reg for meta training
+oof_reg, reg_models = oof_regressor(reg_base, X_train_reg, y_reg_train)
 
-# # -----------------------------
-# # 4) Tune meta on OOF features
-# # -----------------------------
-# X_train_meta = create_meta_features(X_train, p11=oof_11, p12=oof_12, reg_vec=oof_reg)
-# best_params_meta = tune_meta_params(X_train_meta, y_meta_train, name="meta")
-# meta_model = LGBMClassifier(**best_params_meta).fit(X_train_meta, y_meta_train, categorical_feature=['pair'])
+# -----------------------------
+# 4) Tune meta on OOF features
+# -----------------------------
+X_train_meta = create_meta_features(X_train, p11=oof_11, p12=oof_12, reg_vec=oof_reg)
+best_params_meta = tune_meta_params(X_train_meta, y_meta_train, name="meta")
+meta_model = LGBMClassifier(**best_params_meta).fit(X_train_meta, y_meta_train, categorical_feature=['pair'])
 
-# # -----------------------------
-# # 5) Holdout Evaluation
-# # -----------------------------
-# # Base binaries (use fold ensemble on test)
-# p11_test = np.mean([m.predict_proba(X_test)[:, 1] for m in models_11], axis=0)
-# p12_test = np.mean([m.predict_proba(X_test)[:, 1] for m in models_12], axis=0)
-# y11_pred = (p11_test >= 0.5).astype(int)
-# y12_pred = (p12_test >= 0.5).astype(int)
+# -----------------------------
+# 5) Holdout Evaluation
+# -----------------------------
+# Base binaries (use fold ensemble on test)
+p11_test = np.mean([m.predict_proba(X_test)[:, 1] for m in models_11], axis=0)
+p12_test = np.mean([m.predict_proba(X_test)[:, 1] for m in models_12], axis=0)
+y11_pred = (p11_test >= 0.5).astype(int)
+y12_pred = (p12_test >= 0.5).astype(int)
 
-# print("\n=== BINARY 1:1 ===")
-# print("ROC AUC:", roc_auc_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], p11_test))
-# print("Accuracy:", accuracy_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
-# print("F1:", f1_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
-# print(confusion_matrix(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
-# print(classification_report(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred, target_names=['<1R', '>=1R']))
+print("\n=== BINARY 1:1 ===")
+print("ROC AUC:", roc_auc_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], p11_test))
+print("Accuracy:", accuracy_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
+print("F1:", f1_score(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
+print(confusion_matrix(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred))
+print(classification_report(y_bin_test[TARGET_COLUMNS['binary_rr1']], y11_pred, target_names=['<1R', '>=1R']))
 
-# print("\n=== BINARY 1:2 ===")
-# print("ROC AUC:", roc_auc_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], p12_test))
-# print("Accuracy:", accuracy_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
-# print("F1:", f1_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
-# print(confusion_matrix(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
-# print(classification_report(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred, target_names=['<2R', '>=2R']))
+print("\n=== BINARY 1:2 ===")
+print("ROC AUC:", roc_auc_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], p12_test))
+print("Accuracy:", accuracy_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
+print("F1:", f1_score(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
+print(confusion_matrix(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred))
+print(classification_report(y_bin_test[TARGET_COLUMNS['binary_rr2']], y12_pred, target_names=['<2R', '>=2R']))
 
-# # Regressor (use fold ensemble on test features)
-# X_test_reg = create_reg_features(X_test, models_11=models_11, models_12=models_12)
-# regressor = LGBMRegressor(**best_params_reg).fit(X_train_reg, y_reg_train, categorical_feature=['pair'])
-# reg_pred = regressor.predict(X_test_reg)
+# Regressor (use fold ensemble on test features)
+X_test_reg = create_reg_features(X_test, models_11=models_11, models_12=models_12)
+regressor = LGBMRegressor(**best_params_reg).fit(X_train_reg, y_reg_train, categorical_feature=['pair'])
+reg_pred = regressor.predict(X_test_reg)
 
-# print("\n=== REGRESSOR (rr_label) ===")
-# print("MAE:", mean_absolute_error(y_reg_test, reg_pred))
-# print("RMSE:", rmse(y_reg_test, reg_pred))
-# print("R2:", r2_score(y_reg_test, reg_pred))
+print("\n=== REGRESSOR (rr_label) ===")
+print("MAE:", mean_absolute_error(y_reg_test, reg_pred))
+print("RMSE:", rmse(y_reg_test, reg_pred))
+print("R2:", r2_score(y_reg_test, reg_pred))
 
-# # Meta (use fold ensembles for base + reg)
-# X_test_meta = create_meta_features(X_test, models_11=models_11, models_12=models_12, reg_models=reg_models)
-# meta_pred = meta_model.predict(X_test_meta)
+# Meta (use fold ensembles for base + reg)
+X_test_meta = create_meta_features(X_test, models_11=models_11, models_12=models_12, reg_models=reg_models)
+meta_pred = meta_model.predict(X_test_meta)
 
-# print("\n=== META (0=Reject,1=1:1,2=1:2) ===")
-# target_names = ['Reject', '1:1', '1:2'][:len(np.unique(y_meta_test))]
-# print(classification_report(y_meta_test, meta_pred, target_names=target_names, digits=4))
-# print(confusion_matrix(y_meta_test, meta_pred))
+print("\n=== META (0=Reject,1=1:1,2=1:2) ===")
+target_names = ['Reject', '1:1', '1:2'][:len(np.unique(y_meta_test))]
+print(classification_report(y_meta_test, meta_pred, target_names=target_names, digits=4))
+print(confusion_matrix(y_meta_test, meta_pred))
 
-# # -----------------------------
-# # 6) Final training on ALL data (single models)
-# # -----------------------------
-# print("\nTraining final models on ALL data...")
+# -----------------------------
+# 6) Final training on ALL data (single models)
+# -----------------------------
+print("\nTraining final models on ALL data...")
 
-# # Rebuild labels (ensure consistency)
-# df_full = df.copy()
-# X_full = df_full[features]
-# y_full_bin11 = df_full[TARGET_COLUMNS['binary_rr1']]
-# y_full_bin12 = df_full[TARGET_COLUMNS['binary_rr2']]
-# y_full_reg   = df_full[TARGET_COLUMNS['regression']]
-# y_full_meta  = df_full[TARGET_COLUMNS['meta']]
+# Rebuild labels (ensure consistency)
+df_full = df.copy()
+X_full = df_full[features]
+y_full_bin11 = df_full[TARGET_COLUMNS['binary_rr1']]
+y_full_bin12 = df_full[TARGET_COLUMNS['binary_rr2']]
+y_full_reg   = df_full[TARGET_COLUMNS['regression']]
+y_full_meta  = df_full[TARGET_COLUMNS['meta']]
 
-# # Final base models
-# clf11_final = LGBMClassifier(**best_params_11).fit(X_full, y_full_bin11, categorical_feature=['pair'])
-# clf12_final = LGBMClassifier(**best_params_12).fit(X_full, y_full_bin12, categorical_feature=['pair'])
+# Final base models
+clf11_final = LGBMClassifier(**best_params_11).fit(X_full, y_full_bin11, categorical_feature=['pair'])
+clf12_final = LGBMClassifier(**best_params_12).fit(X_full, y_full_bin12, categorical_feature=['pair'])
 
-# # Final regressor features/preds
-# p11_full = clf11_final.predict_proba(X_full)[:, 1]
-# p12_full = clf12_final.predict_proba(X_full)[:, 1]
-# X_full_reg = create_reg_features(X_full, p11=p11_full, p12=p12_full)
+# Final regressor features/preds
+p11_full = clf11_final.predict_proba(X_full)[:, 1]
+p12_full = clf12_final.predict_proba(X_full)[:, 1]
+X_full_reg = create_reg_features(X_full, p11=p11_full, p12=p12_full)
 
-# reg_final = LGBMRegressor(**best_params_reg).fit(X_full_reg, y_full_reg, categorical_feature=['pair'])
+reg_final = LGBMRegressor(**best_params_reg).fit(X_full_reg, y_full_reg, categorical_feature=['pair'])
 
-# # Final meta features/preds
-# reg_full_pred = reg_final.predict(X_full_reg)
-# X_full_meta = create_meta_features(X_full, p11=p11_full, p12=p12_full, reg_vec=reg_full_pred)
-# meta_final = LGBMClassifier(**best_params_meta).fit(X_full_meta, y_full_meta, categorical_feature=['pair'])
+# Final meta features/preds
+reg_full_pred = reg_final.predict(X_full_reg)
+X_full_meta = create_meta_features(X_full, p11=p11_full, p12=p12_full, reg_vec=reg_full_pred)
+meta_final = LGBMClassifier(**best_params_meta).fit(X_full_meta, y_full_meta, categorical_feature=['pair'])
 
-# # -----------------------------
-# # 7) Save artifacts
-# # -----------------------------
-# clf11_final.booster_.save_model(f"{MODEL_DIR}classifier_1_1.txt")
-# clf12_final.booster_.save_model(f"{MODEL_DIR}classifier_1_2.txt")
-# reg_final.booster_.save_model(f"{MODEL_DIR}regressor.txt")
-# meta_final.booster_.save_model(f"{MODEL_DIR}meta_model.txt")
+# -----------------------------
+# 7) Save artifacts
+# -----------------------------
+clf11_final.booster_.save_model(f"{MODEL_DIR}classifier_1_1.txt")
+clf12_final.booster_.save_model(f"{MODEL_DIR}classifier_1_2.txt")
+reg_final.booster_.save_model(f"{MODEL_DIR}regressor.txt")
+meta_final.booster_.save_model(f"{MODEL_DIR}meta_model.txt")
 
-# pair_categories = df_full['pair'].cat.categories.tolist()
-# metadata = {
-#     "features": features,
-#     "target_columns": TARGET_COLUMNS,
-#     "best_params": {
-#         "clf_1_1": best_params_11,
-#         "clf_1_2": best_params_12,
-#         "reg": best_params_reg,
-#         "meta": best_params_meta
-#     },
-#     # NEW: store category ordering used in training
-#     "pair_categories": pair_categories,
-# }
-# joblib.dump(metadata, f"{MODEL_DIR}model_metadata.pkl")
+pair_categories = df_full['pair'].cat.categories.tolist()
+metadata = {
+    "features": features,
+    "target_columns": TARGET_COLUMNS,
+    "best_params": {
+        "clf_1_1": best_params_11,
+        "clf_1_2": best_params_12,
+        "reg": best_params_reg,
+        "meta": best_params_meta
+    },
+    # NEW: store category ordering used in training
+    "pair_categories": pair_categories,
+}
+joblib.dump(metadata, f"{MODEL_DIR}model_metadata.pkl")
 
 
-# print("\n✅ All models trained and saved successfully!")
+print("\n✅ All models trained and saved successfully!")
 
-# # -----------------------------
-# # 8) Feature importances (optional CSVs)
-# # -----------------------------
-# def dump_importance(model, cols, path, title):
-#     if hasattr(model, "feature_importances_"):
-#         imp = pd.DataFrame({"Feature": cols, "Importance": model.feature_importances_}) \
-#                 .sort_values("Importance", ascending=False)
-#         imp.to_csv(path, index=False)
-#         print(f"{title} top10:\n", imp.head(10), "\n")
-#         return imp
-#     else:
-#         print(f"⚠️ No feature_importances_ for {title}")
-#         return pd.DataFrame()
+# -----------------------------
+# 8) Feature importances (optional CSVs)
+# -----------------------------
+def dump_importance(model, cols, path, title):
+    if hasattr(model, "feature_importances_"):
+        imp = pd.DataFrame({"Feature": cols, "Importance": model.feature_importances_}) \
+                .sort_values("Importance", ascending=False)
+        imp.to_csv(path, index=False)
+        print(f"{title} top10:\n", imp.head(10), "\n")
+        return imp
+    else:
+        print(f"⚠️ No feature_importances_ for {title}")
+        return pd.DataFrame()
 
-# # Names for the final (full-data) stacks
-# reg_feature_names  = X_full_reg.columns.tolist()
-# meta_feature_names = X_full_meta.columns.tolist()
+# Names for the final (full-data) stacks
+reg_feature_names  = X_full_reg.columns.tolist()
+meta_feature_names = X_full_meta.columns.tolist()
 
-# dump_importance(clf11_final, features, f"{MODEL_DIR}classifier_feature_importance_1_1.csv", "Classifier 1:1")
-# dump_importance(clf12_final, features, f"{MODEL_DIR}classifier_feature_importance_1_2.csv", "Classifier 1:2")
-# dump_importance(reg_final,  reg_feature_names,  f"{MODEL_DIR}regression_feature_importance.csv", "Regressor")
-# dump_importance(meta_final, meta_feature_names, f"{MODEL_DIR}meta_feature_importance.csv", "Meta")
+dump_importance(clf11_final, features, f"{MODEL_DIR}classifier_feature_importance_1_1.csv", "Classifier 1:1")
+dump_importance(clf12_final, features, f"{MODEL_DIR}classifier_feature_importance_1_2.csv", "Classifier 1:2")
+dump_importance(reg_final,  reg_feature_names,  f"{MODEL_DIR}regression_feature_importance.csv", "Regressor")
+dump_importance(meta_final, meta_feature_names, f"{MODEL_DIR}meta_feature_importance.csv", "Meta")
 
 
 # import pandas as pd
@@ -1850,7 +1850,7 @@ print("\n✅ XGBoost models trained and saved.")
 # }
 
 # # --- 1. Load and Prepare Data ---
-# df = pd.read_csv("testbuy.csv")
+# df = pd.read_csv("test-combined.csv")
 
 # # Filter and prepare data
 # df = df[df['label'] != 0].copy()  # Remove neutral trades
