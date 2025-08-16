@@ -702,7 +702,7 @@ def apply_triple_barrier_with_long_multi(
             continue
 
         # Entry filters
-        if not bool(df['valid_hour'].iloc[i]) or not bool(df['SFP_Up'].iloc[i]):
+        if not bool(df['valid_hour'].iloc[i]) and not bool(df['SFP_Up'].iloc[i]):
             rr_labels.append(np.nan)
             for pt in pt_mult_list:
                 y_labels_dict[f"y_{pt}R"].append(np.nan)
@@ -825,7 +825,7 @@ def apply_triple_barrier_with_short_multi(
             sides.append(-1)
             continue
 
-        if not bool(df['valid_hour'].iloc[i]) or not bool(df['SFP_Down'].iloc[i]):
+        if not bool(df['valid_hour'].iloc[i]) and not bool(df['SFP_Down'].iloc[i]):
             rr_labels.append(np.nan)
             for pt in pt_mult_list:
                 y_labels_dict[f"y_{pt}R"].append(np.nan)
