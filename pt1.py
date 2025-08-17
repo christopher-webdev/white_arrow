@@ -29,9 +29,8 @@ THRESHOLDS = [1, 2, 3]  # 1R, 2R, 3R
 
 # Set threading
 os.environ["OMP_NUM_THREADS"] = str(os.cpu_count() or 1)
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-
+os.environ["OPENBLAS_NUM_THREADS"] = str(os.cpu_count())
+os.environ["MKL_NUM_THREADS"] = str(os.cpu_count())
 # -----------------------------
 # Base Parameters (Unbalanced)
 # -----------------------------
@@ -41,7 +40,7 @@ DEFAULT_MC_PARAMS = {
     "boosting_type": "gbdt",
     "verbosity": 1,
     "random_state": RANDOM_STATE,
-    "n_estimators": 500,
+    "n_estimators": 300#,
     "learning_rate": 0.05,
     "num_leaves": 64,
     "max_depth": -1,
@@ -52,6 +51,7 @@ DEFAULT_MC_PARAMS = {
     "lambda_l1": 0.0,
     "lambda_l2": 0.0,
     "class_weight": None,
+    "force_col_wise": True,
     "n_jobs": os.cpu_count() or 1,
 }
 
@@ -60,7 +60,7 @@ DEFAULT_REG_PARAMS = {
     "boosting_type": "gbdt",
     "verbosity": 1,
     "random_state": RANDOM_STATE,
-    "n_estimators": 600,
+    "n_estimators": 300,
     "learning_rate": 0.05,
     "num_leaves": 64,
     "max_depth": -1,
@@ -69,6 +69,7 @@ DEFAULT_REG_PARAMS = {
     "bagging_fraction": 0.9,
     "bagging_freq": 1,
     "lambda_l1": 0.0,
+    "force_col_wise": True,
     "lambda_l2": 0.0,
     "n_jobs": os.cpu_count() or 1,
 }
@@ -79,7 +80,7 @@ DEFAULT_META_PARAMS = {
     "boosting_type": "gbdt",
     "verbosity": 1,
     "random_state": RANDOM_STATE,
-    "n_estimators": 500,
+    "n_estimators": 300,
     "learning_rate": 0.05,
     "num_leaves": 64,
     "max_depth": -1,
@@ -89,6 +90,7 @@ DEFAULT_META_PARAMS = {
     "bagging_freq": 1,
     "lambda_l1": 0.0,
     "lambda_l2": 0.0,
+    "force_col_wise": True,
     "class_weight": None,
     "n_jobs": os.cpu_count() or 1,
 }
