@@ -40,7 +40,7 @@ DEFAULT_MC_PARAMS = {
     "boosting_type": "gbdt",
     "verbosity": 1,
     "random_state": RANDOM_STATE,
-    "n_estimators": 300#,
+    "n_estimators": 300,
     "learning_rate": 0.05,
     "num_leaves": 64,
     "max_depth": -1,
