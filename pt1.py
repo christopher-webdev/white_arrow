@@ -15,7 +15,7 @@ from typing import Dict, List, Tuple
 from lightgbm import LGBMClassifier, LGBMRegressor, early_stopping, log_evaluation
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import mean_absolute_error, classification_report
-
+from sklearn.base import clone
 # -----------------------------
 # Configuration
 # -----------------------------
